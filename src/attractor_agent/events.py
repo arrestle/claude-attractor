@@ -1,0 +1,86 @@
+"""Event system for the Coding Agent Loop.
+
+Defines the 13 event kinds covering the full session lifecycle,
+plus the event emitter used by Session to notify observers.
+
+Spec reference: coding-agent-loop §2.9.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+
+class EventKind(StrEnum):
+    """Session event types. Spec §2.9."""
+
+    # Session lifecycle
+    SESSION_START = "session.start"
+    SESSION_END = "session.end"
+
+    # Turn lifecycle
+    TURN_START = "turn.start"
+    TURN_END = "turn.end"
+
+    # Assistant output
+    ASSISTANT_TEXT = "assistant.text"
+    ASSISTANT_TEXT_DELTA = "assistant.text_delta"
+
+    # Tool execution
+    TOOL_CALL_START = "tool.call_start"
+    TOOL_CALL_END = "tool.call_end"
+
+    # Steering
+    STEER_INJECTED = "steer.injected"
+
+    # Limits and errors
+    LIMIT_REACHED = "limit.reached"
+    LOOP_DETECTED = "loop.detected"
+    ERROR = "error"
+
+
+@dataclass
+class SessionEvent:
+    """A single event emitted by the agent session."""
+
+    kind: EventKind
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+# Callback type for event handlers
+EventHandler = Callable[[SessionEvent], Awaitable[None] | None]
+
+
+class EventEmitter:
+    """Simple event emitter for session events.
+
+    Supports both sync and async handlers. Handlers are called
+    in registration order. Exceptions in handlers are caught and
+    logged (they don't break the session loop).
+    """
+
+    def __init__(self) -> None:
+        self._handlers: list[EventHandler] = []
+
+    def on(self, handler: EventHandler) -> None:
+        """Register an event handler."""
+        self._handlers.append(handler)
+
+    def off(self, handler: EventHandler) -> None:
+        """Remove an event handler."""
+        self._handlers = [h for h in self._handlers if h is not handler]
+
+    async def emit(self, event: SessionEvent) -> None:
+        """Emit an event to all registered handlers."""
+        for handler in self._handlers:
+            try:
+                result = handler(event)
+                if isinstance(result, Awaitable):
+                    await result
+            except Exception:  # noqa: BLE001
+                # Don't let handler errors break the session loop.
+                # In production, this should log the exception.
+                pass

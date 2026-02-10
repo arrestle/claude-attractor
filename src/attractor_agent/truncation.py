@@ -1,0 +1,86 @@
+"""Tool output truncation engine.
+
+Implements the two-pass truncation strategy from coding-agent-loop §5.1-5.3:
+1. Character-based truncation (head/tail split)
+2. Line-based truncation (keep first N + last M lines)
+
+The goal is to keep tool output within token budgets while preserving
+the most useful information (beginning and end of output).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class TruncationLimits:
+    """Per-tool truncation limits. Spec §5.2."""
+
+    max_chars: int = 30_000
+    max_lines: int = 500
+    head_ratio: float = 0.7  # proportion of budget for head vs tail
+
+    # Common presets per tool type
+    @classmethod
+    def for_tool(cls, tool_name: str) -> TruncationLimits:
+        """Get truncation limits for a specific tool."""
+        presets: dict[str, TruncationLimits] = {
+            "read_file": cls(max_chars=50_000, max_lines=1000),
+            "shell": cls(max_chars=30_000, max_lines=500),
+            "grep": cls(max_chars=20_000, max_lines=300),
+            "glob": cls(max_chars=10_000, max_lines=200),
+            "write_file": cls(max_chars=5_000, max_lines=50),
+            "edit_file": cls(max_chars=5_000, max_lines=50),
+        }
+        return presets.get(tool_name, cls())
+
+
+def truncate_output(
+    output: str,
+    limits: TruncationLimits | None = None,
+) -> tuple[str, bool]:
+    """Truncate tool output using two-pass strategy.
+
+    Pass 1: Character-based truncation (head + tail split)
+    Pass 2: Line-based truncation (keep first N + last M lines)
+
+    Args:
+        output: Raw tool output string.
+        limits: Truncation configuration. Uses defaults if None.
+
+    Returns:
+        Tuple of (truncated_output, was_truncated).
+    """
+    if not output:
+        return output, False
+
+    if limits is None:
+        limits = TruncationLimits()
+
+    truncated = False
+
+    # Pass 1: Character-based truncation
+    if len(output) > limits.max_chars:
+        head_size = int(limits.max_chars * limits.head_ratio)
+        tail_size = limits.max_chars - head_size
+        head = output[:head_size]
+        tail = output[-tail_size:] if tail_size > 0 else ""
+        omitted = len(output) - head_size - tail_size
+        output = f"{head}\n\n[... {omitted:,} characters omitted ...]\n\n{tail}"
+        truncated = True
+
+    # Pass 2: Line-based truncation
+    lines = output.split("\n")
+    if len(lines) > limits.max_lines:
+        head_lines = int(limits.max_lines * limits.head_ratio)
+        tail_lines = limits.max_lines - head_lines
+        head = lines[:head_lines]
+        tail = lines[-tail_lines:] if tail_lines > 0 else []
+        omitted_lines = len(lines) - head_lines - tail_lines
+        output = (
+            "\n".join(head) + f"\n\n[... {omitted_lines:,} lines omitted ...]\n\n" + "\n".join(tail)
+        )
+        truncated = True
+
+    return output, truncated

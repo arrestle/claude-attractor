@@ -1,0 +1,161 @@
+"""Tool registry for the Coding Agent Loop.
+
+Manages registration, lookup, validation, and execution of tools.
+The registry is the central dispatch point for all tool calls from the LLM.
+
+Spec reference: coding-agent-loop §3.8.
+"""
+
+from __future__ import annotations
+
+import json
+
+from attractor_agent.events import EventEmitter, EventKind, SessionEvent
+from attractor_agent.truncation import TruncationLimits, truncate_output
+from attractor_llm.types import ContentPart, ContentPartKind, Tool
+
+
+class ToolRegistry:
+    """Registry for managing and executing tools.
+
+    The tool execution pipeline follows this sequence:
+    1. Lookup: Find the tool by name
+    2. Validate: Check input against JSON Schema (basic)
+    3. Execute: Run the tool's execute handler
+    4. Truncate: Apply output truncation limits
+    5. Emit: Fire tool.call_start and tool.call_end events
+    6. Return: Build tool result ContentPart
+
+    Spec reference: coding-agent-loop §3.8.
+    """
+
+    def __init__(self, event_emitter: EventEmitter | None = None) -> None:
+        self._tools: dict[str, Tool] = {}
+        self._emitter = event_emitter
+
+    def register(self, tool: Tool) -> None:
+        """Register a tool. Overwrites if name already exists."""
+        self._tools[tool.name] = tool
+
+    def register_many(self, tools: list[Tool]) -> None:
+        """Register multiple tools at once."""
+        for tool in tools:
+            self.register(tool)
+
+    def unregister(self, name: str) -> None:
+        """Remove a tool by name. No-op if not found."""
+        self._tools.pop(name, None)
+
+    def get(self, name: str) -> Tool | None:
+        """Look up a tool by name."""
+        return self._tools.get(name)
+
+    def definitions(self) -> list[Tool]:
+        """Return all registered tools (for sending to LLM)."""
+        return list(self._tools.values())
+
+    def has(self, name: str) -> bool:
+        """Check if a tool is registered."""
+        return name in self._tools
+
+    async def execute_tool_call(self, tool_call: ContentPart) -> ContentPart:
+        """Execute a single tool call and return the result.
+
+        Handles the full pipeline: lookup → validate → execute → truncate → emit.
+
+        Args:
+            tool_call: A ContentPart with kind=TOOL_CALL.
+
+        Returns:
+            A ContentPart with kind=TOOL_RESULT containing the output.
+        """
+        assert tool_call.kind == ContentPartKind.TOOL_CALL  # noqa: S101
+
+        tool_name = tool_call.name or ""
+        tool_call_id = tool_call.tool_call_id or ""
+        arguments = tool_call.arguments
+
+        # Parse arguments if string
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+
+        if not isinstance(arguments, dict):
+            arguments = {}
+
+        # Emit start event
+        if self._emitter:
+            await self._emitter.emit(
+                SessionEvent(
+                    kind=EventKind.TOOL_CALL_START,
+                    data={"tool": tool_name, "call_id": tool_call_id, "arguments": arguments},
+                )
+            )
+
+        # Lookup
+        tool = self.get(tool_name)
+        if tool is None:
+            output = f"Error: Unknown tool '{tool_name}'"
+            is_error = True
+        elif tool.execute is None:
+            output = f"Error: Tool '{tool_name}' has no execute handler"
+            is_error = True
+        else:
+            # Execute
+            try:
+                raw_output = await tool.execute(**arguments)
+                is_error = False
+
+                # Truncate
+                limits = TruncationLimits.for_tool(tool_name)
+                output, was_truncated = truncate_output(str(raw_output), limits)
+                if was_truncated:
+                    output += "\n[output was truncated]"
+
+            except Exception as exc:  # noqa: BLE001
+                # Send only the exception message to the LLM, not the full
+                # traceback (which leaks internal paths and implementation details).
+                output = f"Error executing {tool_name}: {type(exc).__name__}: {exc}"
+                is_error = True
+
+        # Emit end event
+        if self._emitter:
+            await self._emitter.emit(
+                SessionEvent(
+                    kind=EventKind.TOOL_CALL_END,
+                    data={
+                        "tool": tool_name,
+                        "call_id": tool_call_id,
+                        "is_error": is_error,
+                        "output_length": len(output),
+                    },
+                )
+            )
+
+        return ContentPart.tool_result_part(
+            tool_call_id=tool_call_id,
+            name=tool_name,
+            output=output,
+            is_error=is_error,
+        )
+
+    async def execute_tool_calls(self, tool_calls: list[ContentPart]) -> list[ContentPart]:
+        """Execute multiple tool calls and return results.
+
+        Tool calls are executed sequentially (not in parallel) to avoid
+        filesystem race conditions. Parallel execution can be added later
+        for tools that are known to be safe for concurrency.
+
+        Args:
+            tool_calls: List of ContentParts with kind=TOOL_CALL.
+
+        Returns:
+            List of ContentParts with kind=TOOL_RESULT, in the same order.
+        """
+        results: list[ContentPart] = []
+        for tc in tool_calls:
+            result = await self.execute_tool_call(tc)
+            results.append(result)
+        return results
