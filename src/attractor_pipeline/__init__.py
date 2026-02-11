@@ -28,10 +28,19 @@ from attractor_pipeline.handlers import (
     register_default_handlers,
 )
 from attractor_pipeline.parser import parse_dot
+from attractor_pipeline.stylesheet import (
+    Stylesheet,
+    apply_stylesheet,
+    parse_stylesheet,
+)
 
 __all__ = [
     # Parser
     "parse_dot",
+    # Stylesheet
+    "Stylesheet",
+    "parse_stylesheet",
+    "apply_stylesheet",
     # Graph model
     "Graph",
     "Node",

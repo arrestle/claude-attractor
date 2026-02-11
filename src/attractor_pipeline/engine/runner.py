@@ -27,6 +27,7 @@ from typing import Any, Protocol
 from attractor_agent.abort import AbortSignal
 from attractor_pipeline.conditions import evaluate_condition
 from attractor_pipeline.graph import Edge, Graph, Node
+from attractor_pipeline.stylesheet import apply_stylesheet
 
 # ------------------------------------------------------------------ #
 # Handler protocol
@@ -265,6 +266,9 @@ async def run_pipeline(
     ctx = dict(context or {})
     ctx["goal"] = graph.goal
     start_time = time.monotonic()
+
+    # Apply model stylesheet to nodes before execution (Spec §8)
+    apply_stylesheet(graph)
 
     # State tracking
     completed_nodes: list[str] = []
