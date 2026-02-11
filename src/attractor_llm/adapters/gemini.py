@@ -380,7 +380,7 @@ class GeminiAdapter:
         body = self._translate_request(request)
         url = self._endpoint(request.model, method="streamGenerateContent")
         # Gemini streaming uses alt=sse query parameter
-        url += "&alt=sse"
+        url += "?alt=sse"
 
         async with self._client.stream("POST", url, json=body) as http_response:
             if http_response.status_code != 200:
@@ -405,6 +405,7 @@ class GeminiAdapter:
         first_chunk: bool,
     ) -> AsyncIterator[StreamEvent]:
         """Parse Gemini SSE stream into unified StreamEvents."""
+        has_seen_tool_call = False
         async for line in http_response.aiter_lines():
             line = line.strip()
 
@@ -454,6 +455,7 @@ class GeminiAdapter:
                             )
 
                     elif "functionCall" in part:
+                        has_seen_tool_call = True
                         fc = part["functionCall"]
                         tc_id = f"gemini_{uuid.uuid4().hex[:12]}"
                         yield StreamEvent(
@@ -475,12 +477,15 @@ class GeminiAdapter:
                             tool_call_id=tc_id,
                         )
 
-                # Check for finish
+                # Check for finish -- override STOP to TOOL_CALLS if we saw tool calls
                 finish_reason_str = candidate.get("finishReason")
                 if finish_reason_str:
+                    fr = self._map_finish_reason(finish_reason_str)
+                    if fr == FinishReason.STOP and has_seen_tool_call:
+                        fr = FinishReason.TOOL_CALLS
                     yield StreamEvent(
                         kind=StreamEventKind.FINISH,
-                        finish_reason=self._map_finish_reason(finish_reason_str),
+                        finish_reason=fr,
                     )
 
             # Usage metadata

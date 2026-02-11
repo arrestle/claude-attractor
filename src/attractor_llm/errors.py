@@ -36,9 +36,7 @@ class ProviderError(SDKError):
         retryable: bool = False,
         raw_response: dict | None = None,  # noqa: UP006
     ) -> None:
-        super().__init__(
-            message, provider=provider, status_code=status_code, retryable=retryable
-        )
+        super().__init__(message, provider=provider, status_code=status_code, retryable=retryable)
         self.raw_response = raw_response
 
 
@@ -201,7 +199,10 @@ def classify_http_error(
         )
     if status_code == 408:
         return ProviderError(
-            body, provider=provider, status_code=status_code, retryable=True,
+            body,
+            provider=provider,
+            status_code=status_code,
+            retryable=True,
             raw_response=raw_response,
         )
     if status_code >= 500:
@@ -209,6 +210,9 @@ def classify_http_error(
             body, provider=provider, status_code=status_code, raw_response=raw_response
         )
     return ProviderError(
-        body, provider=provider, status_code=status_code, retryable=False,
+        body,
+        provider=provider,
+        status_code=status_code,
+        retryable=False,
         raw_response=raw_response,
     )

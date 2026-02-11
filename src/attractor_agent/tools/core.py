@@ -354,7 +354,12 @@ async def _shell(
     if blocked:
         raise PermissionError(blocked)
 
+    # Security: validate working_dir is within allowed roots
     cwd = working_dir or os.getcwd()
+    cwd_path = Path(cwd).expanduser().resolve()
+    path_error = _check_path_allowed(cwd_path)
+    if path_error:
+        raise PermissionError(f"Shell working_dir outside allowed roots: {path_error}")
     filtered_env = _filter_env()
 
     def _run() -> str:

@@ -181,11 +181,12 @@ class OpenAIAdapter:
                                 args = part.arguments
                                 if isinstance(args, dict):
                                     args = json.dumps(args)
+                                resolved_id = part.tool_call_id or str(uuid.uuid4())
                                 items.append(
                                     {
                                         "type": "function_call",
-                                        "id": part.tool_call_id or str(uuid.uuid4()),
-                                        "call_id": part.tool_call_id or str(uuid.uuid4()),
+                                        "id": resolved_id,
+                                        "call_id": resolved_id,
                                         "name": part.name or "",
                                         "arguments": args or "{}",
                                     }
@@ -397,6 +398,7 @@ class OpenAIAdapter:
         # Track current function call for delta accumulation
         current_fc_id: str | None = None
         current_fc_name: str | None = None
+        has_seen_tool_call: bool = False
 
         async for line in http_response.aiter_lines():
             line = line.strip()
@@ -424,6 +426,7 @@ class OpenAIAdapter:
                     request,
                     current_fc_id,
                     current_fc_name,
+                    has_seen_tool_call,
                 ):
                     yield ev
 
@@ -431,6 +434,7 @@ class OpenAIAdapter:
                 if event_type == "response.output_item.added":
                     item = data.get("item", {})
                     if item.get("type") == "function_call":
+                        has_seen_tool_call = True
                         current_fc_id = item.get("call_id", item.get("id"))
                         current_fc_name = item.get("name")
                 elif event_type == "response.output_item.done":
@@ -448,6 +452,7 @@ class OpenAIAdapter:
         request: Request,
         fc_id: str | None,
         fc_name: str | None,
+        has_seen_tool_call: bool = False,
     ) -> AsyncIterator[StreamEvent]:
         """Convert a single OpenAI SSE event to unified StreamEvents."""
         match event_type:
@@ -509,9 +514,12 @@ class OpenAIAdapter:
                     )
 
                 status = resp.get("status", "completed")
+                fr = self._map_finish_reason(status, resp)
+                if fr == FinishReason.STOP and has_seen_tool_call:
+                    fr = FinishReason.TOOL_CALLS
                 yield StreamEvent(
                     kind=StreamEventKind.FINISH,
-                    finish_reason=self._map_finish_reason(status),
+                    finish_reason=fr,
                 )
 
             case "error":

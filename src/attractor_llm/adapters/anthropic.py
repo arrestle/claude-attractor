@@ -281,15 +281,15 @@ class AnthropicAdapter:
         This is the "single highest-ROI optimization for agentic workloads"
         per the spec.
         """
-        # 1. Cache system message (last block)
+        # 1. Cache system message -- persistent (stable across turns)
         if "system" in body and body["system"]:
             body["system"][-1]["cache_control"] = {"type": "ephemeral"}
 
-        # 2. Cache tool definitions (last tool)
+        # 2. Cache tool definitions -- persistent (stable across turns)
         if "tools" in body and body["tools"]:
             body["tools"][-1]["cache_control"] = {"type": "ephemeral"}
 
-        # 3. Cache last user message (last content block of last user msg)
+        # 3. Cache last user message -- ephemeral (changes each turn)
         messages = body.get("messages", [])
         for msg in reversed(messages):
             if msg["role"] == "user" and msg["content"]:
