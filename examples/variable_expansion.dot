@@ -1,0 +1,39 @@
+// Variable Expansion in Prompts
+//
+// Demonstrates full $variable expansion beyond just $goal.
+// Context variables from previous stages are available to later stages.
+//
+// Supported syntax:
+//   $variable        -- bare variable name
+//   ${variable}      -- braced form for disambiguation
+//   \$literal        -- escaped dollar sign (no expansion)
+//
+// Run: uv run python -m attractor_pipeline.cli run examples/variable_expansion.dot --no-tools
+
+digraph VariableExpansion {
+    graph [goal="Build a Python utility"]
+
+    start [shape=ellipse]
+
+    // Stage 1: Define the spec. Output becomes available as $codergen.define_spec.output
+    define_spec [
+        shape=box,
+        prompt="Define a brief spec for: $goal. Include: function name, parameters, return type, and one example. Be concise (5 lines max)."
+    ]
+
+    // Stage 2: Uses $goal and references the spec from stage 1
+    implement [
+        shape=box,
+        prompt="Implement this: $goal. Follow the spec defined earlier. Include type hints and a docstring. Code only."
+    ]
+
+    // Stage 3: Uses $goal to write tests
+    write_tests [
+        shape=box,
+        prompt="Write 3 pytest test cases for: $goal. Cover: happy path, edge case, error case. Code only."
+    ]
+
+    done [shape=Msquare]
+
+    start -> define_spec -> implement -> write_tests -> done
+}

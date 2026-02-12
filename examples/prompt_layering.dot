@@ -1,0 +1,43 @@
+// System Prompt Layering
+//
+// Demonstrates the 4-layer prompt composition system.
+// Each node can have a system_prompt attribute that adds a
+// [INSTRUCTION] section on top of the profile base prompt.
+//
+// Layer precedence (highest wins):
+//   1. Profile base prompt (provider-specific, e.g., Claude Code style)
+//   2. Pipeline goal -> [GOAL] section
+//   3. Node system_prompt -> [INSTRUCTION] section
+//   4. User override (from AgentLoopBackend constructor) replaces everything
+//
+// Run: uv run python -m attractor_pipeline.cli run examples/prompt_layering.dot --no-tools
+
+digraph PromptLayering {
+    graph [goal="Build a URL shortener microservice"]
+
+    start [shape=ellipse]
+
+    // This node gets a node-specific instruction on top of the profile + goal
+    architect [
+        shape=box,
+        system_prompt="You are a system architect. Focus on scalability and database design.",
+        prompt="Design the architecture for: $goal. Include: API endpoints, data model, and tech stack."
+    ]
+
+    // This node gets a different instruction -- security focus
+    security [
+        shape=box,
+        system_prompt="You are a security engineer. Focus on OWASP Top 10 and input validation.",
+        prompt="Review the architecture for security concerns. Suggest mitigations."
+    ]
+
+    // This node has no system_prompt -- gets profile + goal only
+    implement [
+        shape=box,
+        prompt="Implement the core URL shortening logic for: $goal. Python code only."
+    ]
+
+    done [shape=Msquare]
+
+    start -> architect -> security -> implement -> done
+}
