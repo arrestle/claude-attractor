@@ -1,0 +1,124 @@
+"""OpenAI provider profile (codex-rs style).
+
+Designed by O3 reviewing its own provider's conventions.
+Key insights from the self-review:
+- GPT/o-series tend to over-explain -- prompt must force action-first
+- Temperature=0.2 for deterministic tool use without rigidity
+- reasoning_effort=medium balances quality vs verbosity
+- max_tokens=1400 encourages concise output
+- Anti-patterns: asking for confirmation, long preambles before acting
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from attractor_agent.session import SessionConfig
+from attractor_llm.types import Tool
+
+
+@dataclass
+class OpenAIProfile:
+    """codex-rs-style profile for OpenAI models."""
+
+    @property
+    def name(self) -> str:
+        return "openai"
+
+    @property
+    def system_prompt(self) -> str:
+        return _OPENAI_SYSTEM_PROMPT
+
+    @property
+    def default_model(self) -> str:
+        return "gpt-5.2"
+
+    def get_tools(self, base_tools: list[Tool]) -> list[Tool]:
+        """Enhance tool descriptions for OpenAI conventions."""
+        tools: list[Tool] = []
+        for tool in base_tools:
+            desc = _OPENAI_TOOL_DESCRIPTIONS.get(tool.name, tool.description)
+            tools.append(
+                Tool(
+                    name=tool.name,
+                    description=desc,
+                    parameters=tool.parameters,
+                    execute=tool.execute,
+                )
+            )
+        return tools
+
+    def apply_to_config(self, config: SessionConfig) -> SessionConfig:
+        """Apply OpenAI defaults to session config."""
+        if not config.system_prompt:
+            config.system_prompt = self.system_prompt
+        if not config.model:
+            config.model = self.default_model
+        if not config.provider:
+            config.provider = "openai"
+        if config.temperature is None:
+            config.temperature = 0.2
+        if config.reasoning_effort is None:
+            config.reasoning_effort = "medium"
+        return config
+
+
+# ------------------------------------------------------------------ #
+# System prompt (designed by O3)
+# ------------------------------------------------------------------ #
+
+_OPENAI_SYSTEM_PROMPT = """\
+You are an expert coding agent. Work in short, action-oriented steps. \
+Be decisive: read files, make edits, and report results without \
+excessive explanation.
+
+RULES
+- Always inspect files before editing. Use read_file to get exact context.
+- Prefer edit_file for small, localized changes. Use write_file only \
+for new files or full rewrites.
+- Use shell only for running tests, builds, or inspection commands.
+- Use grep and glob to locate code before reading large files.
+- After tool use, summarize what changed and what remains.
+
+WORKFLOW PATTERN
+discover (glob/grep) -> inspect (read_file) -> modify (edit_file) -> \
+verify (shell)
+
+EDITING
+- edit_file requires old_string to match exactly and be unique in the file.
+- Always read_file first to see the exact content before editing.
+- For multiple changes to one file, make separate edit_file calls.
+
+ERROR HANDLING
+- If edit_file fails, re-read the file and retry with correct content.
+- If a command fails, read the error output and fix the root cause.
+- Do not retry identical failing tool calls.
+
+AVOID
+- Long explanations or speculative plans.
+- Asking for confirmation if the task is clear.
+- Rewriting entire files when a targeted edit works.
+- Using shell for file reading (use read_file), file writing \
+(use write_file), or code search (use grep).\
+"""
+
+# ------------------------------------------------------------------ #
+# Tool description overrides
+# ------------------------------------------------------------------ #
+
+_OPENAI_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "read_file": (
+        "Read a file's contents with line numbers. "
+        "Must read before edit. Use offset and limit for large files."
+    ),
+    "edit_file": (
+        "Replace a specific string in a file. Use only after reading "
+        "the file. Ensure old_string is unique unless replace_all "
+        "is true."
+    ),
+    "write_file": (
+        "Write content to a file. Creates directories if needed. "
+        "Overwrites existing files. Only for new files or full rewrites "
+        "-- use edit_file for modifications."
+    ),
+}

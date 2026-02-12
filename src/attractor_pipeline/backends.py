@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from attractor_agent.abort import AbortSignal
+from attractor_agent.profiles import get_profile
 from attractor_agent.session import Session, SessionConfig
 from attractor_agent.tools.core import ALL_CORE_TOOLS
 from attractor_llm.client import Client
@@ -67,22 +68,33 @@ class AgentLoopBackend:
         Creates a fresh Session for each node execution, configured
         with the node's LLM settings (model, provider, reasoning_effort).
         """
-        # Resolve model from node attrs or defaults
-        model = node.llm_model or self._default_model
+        # Resolve provider first (needed for profile lookup)
         provider = node.llm_provider or self._default_provider
+
+        # Load provider profile for provider-specific defaults
+        profile = get_profile(provider or "")
+
+        # Resolve model: node attr > backend default > profile default
+        model = node.llm_model or self._default_model or profile.default_model
 
         # Build session config from node attributes
         config = SessionConfig(
             model=model,
             provider=provider,
-            system_prompt=self._system_prompt or f"You are working on: {context.get('goal', '')}",
+            system_prompt=self._system_prompt or "",
             max_turns=1,  # Single-turn for pipeline nodes
             max_tool_rounds_per_turn=15,
             reasoning_effort=node.reasoning_effort or None,
         )
 
-        # Create tools list
-        tools = list(ALL_CORE_TOOLS) if self._include_tools else []
+        # Apply profile defaults (only fills in unset values)
+        config = profile.apply_to_config(config)
+
+        # Create tools list with profile-customized descriptions
+        if self._include_tools:
+            tools = profile.get_tools(list(ALL_CORE_TOOLS))
+        else:
+            tools: list[Any] = []
 
         # Run session with error handling
         try:

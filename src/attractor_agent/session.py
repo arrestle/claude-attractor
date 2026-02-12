@@ -52,9 +52,9 @@ class SessionConfig:
     reasoning_effort: str | None = None
     provider_options: dict[str, Any] | None = None
 
-    # Loop detection
-    loop_detection_window: int = 4
-    loop_detection_threshold: int = 3
+    # Loop detection (None = use defaults: window=4, threshold=3)
+    loop_detection_window: int | None = None
+    loop_detection_threshold: int | None = None
 
 
 @dataclass
@@ -131,8 +131,8 @@ class Session:
 
         # Loop detection
         self._loop_detector = _LoopDetector(
-            window=self._config.loop_detection_window,
-            threshold=self._config.loop_detection_threshold,
+            window=self._config.loop_detection_window or 4,
+            threshold=self._config.loop_detection_threshold or 3,
         )
 
     # ------------------------------------------------------------------ #
