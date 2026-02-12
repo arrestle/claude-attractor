@@ -94,6 +94,12 @@ def build_system_prompt(
             ctx_section = "\n[CONTEXT]\n" + "\n".join(ctx_items)
             parts.append(ctx_section)
 
+    # Layer 2.5: Resume preamble (if resuming from checkpoint)
+    if pipeline_context and "_resume_preamble" in pipeline_context:
+        preamble = pipeline_context["_resume_preamble"]
+        if isinstance(preamble, str) and preamble.strip():
+            parts.append(f"\n\n{preamble.strip()}")
+
     # Layer 3: Node-specific instruction
     if node_instruction:
         node_section = f"\n\n[INSTRUCTION] {node_instruction.strip()}"

@@ -282,6 +282,13 @@ async def run_pipeline(
         node_retry_counts = dict(checkpoint.node_retry_counts)
         goal_gate_redirect_count = checkpoint.goal_gate_redirect_count
 
+        # Generate fidelity preamble so the LLM has context about
+        # what happened before the checkpoint (Spec §5.4)
+        from attractor_pipeline.engine.preamble import generate_resume_preamble
+
+        preamble = generate_resume_preamble(graph, checkpoint)
+        ctx["_resume_preamble"] = preamble
+
     # Find start node
     if checkpoint and checkpoint.current_node_id:
         current_node = graph.get_node(checkpoint.current_node_id)
@@ -372,6 +379,11 @@ async def run_pipeline(
 
         # Apply context updates from handler
         ctx.update(result.context_updates)
+
+        # Clear resume preamble after the first node executes post-resume.
+        # Without this, every subsequent node gets the stale "[RESUME]
+        # Resuming at node X" message even when it's now at node Y.
+        ctx.pop("_resume_preamble", None)
 
         # Track completed nodes
         completed_nodes.append(current_node.id)
