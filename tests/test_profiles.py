@@ -414,6 +414,9 @@ class TestProfileEdgeCases:
 
         assert result == "coded" or (hasattr(result, "output") and result.output)
         # Verify the profile was applied (falls back to base since "mock" is unknown)
+        # With prompt layering, the system prompt includes the profile base
+        # plus [GOAL] section from the context
         req = adapter.requests[0]
         base_profile = BaseProfile()
-        assert req.system == base_profile.system_prompt
+        assert base_profile.system_prompt in req.system
+        assert "[GOAL] test" in req.system

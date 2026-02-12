@@ -17,6 +17,7 @@ from typing import Any
 
 from attractor_agent.abort import AbortSignal
 from attractor_agent.profiles import get_profile
+from attractor_agent.prompt_layer import layer_prompt_for_node
 from attractor_agent.session import Session, SessionConfig
 from attractor_agent.tools.core import ALL_CORE_TOOLS
 from attractor_llm.client import Client
@@ -81,7 +82,13 @@ class AgentLoopBackend:
         config = SessionConfig(
             model=model,
             provider=provider,
-            system_prompt=self._system_prompt or "",
+            system_prompt=layer_prompt_for_node(
+                profile_prompt=profile.system_prompt,
+                goal=context.get("goal", ""),
+                context=context,
+                node_system_prompt=node.attrs.get("system_prompt", ""),
+                user_system_prompt=self._system_prompt,
+            ),
             max_turns=10,  # Allow tool-call rounds within a single pipeline node
             max_tool_rounds_per_turn=15,
             reasoning_effort=node.reasoning_effort or None,

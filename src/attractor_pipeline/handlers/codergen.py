@@ -16,6 +16,7 @@ from typing import Any, Protocol
 from attractor_agent.abort import AbortSignal
 from attractor_pipeline.engine.runner import HandlerResult, Outcome
 from attractor_pipeline.graph import Graph, Node
+from attractor_pipeline.variable_expansion import expand_node_prompt
 
 
 class CodergenBackend(Protocol):
@@ -110,17 +111,14 @@ class CodergenHandler:
     def _expand_prompt(self, node: Node, context: dict[str, Any], graph: Graph) -> str:
         """Expand template variables in the node's prompt.
 
-        Supports $goal, ${key}, and $key variable references.
+        Uses the variable_expansion module for proper $var and ${var}
+        expansion with escaped \\$ support. The graph goal is injected
+        into the context for expansion.
         """
         prompt = node.prompt or node.label or ""
 
-        # $goal -> graph goal
-        prompt = prompt.replace("$goal", graph.goal)
+        # Merge goal into expansion context
+        expand_ctx = dict(context)
+        expand_ctx["goal"] = graph.goal
 
-        # ${key} and $key -> context values
-        for key, value in context.items():
-            if isinstance(value, str):
-                prompt = prompt.replace(f"${{{key}}}", value)
-                prompt = prompt.replace(f"${key}", value)
-
-        return prompt
+        return expand_node_prompt(prompt, expand_ctx)
