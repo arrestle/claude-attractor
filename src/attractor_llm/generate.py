@@ -110,7 +110,7 @@ async def generate(
                     args = tc.arguments
                     if isinstance(args, str):
                         args = json.loads(args)
-                    result = await tool.execute(args)
+                    result = await tool.execute(**args)
                     output = str(result) if not isinstance(result, str) else result
                     is_error = False
                 except Exception as exc:  # noqa: BLE001

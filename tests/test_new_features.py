@@ -294,7 +294,7 @@ class TestGenerateAPI:
         """generate() auto-executes tool calls and feeds results back."""
         call_count = 0
 
-        async def mock_execute(args: dict[str, Any]) -> str:
+        async def mock_execute(input: str = "", **kwargs: Any) -> str:
             nonlocal call_count
             call_count += 1
             return f"tool result {call_count}"
@@ -336,7 +336,7 @@ class TestGenerateAPI:
     async def test_generate_max_rounds(self):
         """generate() stops after max_rounds even if model keeps calling tools."""
 
-        async def noop(args: dict[str, Any]) -> str:
+        async def noop(**kwargs: Any) -> str:
             return "ok"
 
         tool = Tool(

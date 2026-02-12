@@ -249,25 +249,29 @@ def _apply_hunks(original: str, hunks: list[Hunk]) -> str:
     against actual file content before applying -- mismatches raise
     PatchParseError to prevent silent corruption from stale patches.
     """
-    result_lines = original.split("\n")
+    # Snapshot original for verification (immutable reference).
+    # Splicing mutates result_lines, so verifying against it would
+    # produce false mismatches on adjacent hunks.
+    original_lines = original.split("\n")
+    result_lines = list(original_lines)
 
     # Apply hunks in reverse order to preserve line numbers
     for hunk in reversed(hunks):
         old_start = hunk.old_start - 1  # 0-indexed
         old_end = old_start + hunk.old_count
 
-        # Verify context and removal lines match actual content
+        # Verify context and removal lines match ORIGINAL content
         file_idx = old_start
         for line in hunk.lines:
             if line.startswith(" ") or line.startswith("-"):
                 expected = line[1:]
-                if file_idx >= len(result_lines):
+                if file_idx >= len(original_lines):
                     raise PatchParseError(
                         f"Hunk at line {hunk.old_start}: file has "
-                        f"{len(result_lines)} lines but hunk references "
+                        f"{len(original_lines)} lines but hunk references "
                         f"line {file_idx + 1}"
                     )
-                actual = result_lines[file_idx]
+                actual = original_lines[file_idx]
                 if actual != expected:
                     raise PatchParseError(
                         f"Hunk at line {hunk.old_start}: context mismatch "
