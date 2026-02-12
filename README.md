@@ -154,8 +154,8 @@ Mapped against the three StrongDM nlspecs.
 | Reasoning token tracking | Done | §3.9 |
 | Model catalog | Done | §2.9 |
 | Tool calling (parallel execution) | Done | §5 |
-| High-level generate()/stream() API | Not yet | §4.3-4.6 |
-| generate_object() structured output | Not yet | §4.5 |
+| High-level generate()/stream() API | Done | §4.3-4.6 |
+| generate_object() structured output | Done | §4.5 |
 | Middleware/interceptor chain | Not yet | §2.3 |
 | OpenAI-compatible adapter | Not yet | §7.10 |
 
@@ -173,9 +173,9 @@ Mapped against the three StrongDM nlspecs.
 | Cooperative cancellation (AbortSignal) | Done | §2.8 |
 | Path confinement security | Done | (swarm-designed) |
 | Shell command deny-list | Done | (swarm-designed) |
-| Provider-aligned profiles (codex-rs, Claude Code, gemini-cli) | Not yet | §3.4-3.6 |
-| apply_patch v4a format parser | Not yet | Appendix A |
-| Subagent spawning | Not yet | §7 |
+| Provider-aligned profiles (codex-rs, Claude Code, gemini-cli) | Done | §3.4-3.6 |
+| apply_patch v4a format parser | Done | Appendix A |
+| Subagent spawning | Done | §7 |
 | System prompt layering | Not yet | §6 |
 | Execution environment abstraction (Docker, K8s) | Not yet | §4 |
 
