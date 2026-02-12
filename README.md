@@ -42,11 +42,18 @@ cd attractor
 # Install
 uv sync
 
-# Run the end-to-end test (requires Anthropic API key)
-ANTHROPIC_API_KEY=sk-... uv run python examples/e2e_test.py
-```
+# Run a pipeline (requires Anthropic API key)
+ANTHROPIC_API_KEY=sk-... uv run python -m attractor_pipeline.cli run examples/fibonacci.dot --no-tools
 
-The e2e test parses a DOT pipeline, calls Claude Sonnet 4.5 at each stage, and produces real code output. Takes about 7 seconds.
+# Run with OpenAI
+OPENAI_API_KEY=sk-... uv run python -m attractor_pipeline.cli run examples/fibonacci.dot --no-tools --provider openai --model gpt-4.1-mini
+
+# Run with Gemini
+GOOGLE_API_KEY=... uv run python -m attractor_pipeline.cli run examples/fibonacci.dot --no-tools --provider gemini --model gemini-2.5-flash
+
+# Validate a pipeline (no API key needed)
+uv run python -m attractor_pipeline.cli validate examples/fibonacci.dot
+```
 
 ## How It Works
 
@@ -61,17 +68,60 @@ The shape of each node determines what happens when the engine reaches it:
 | `diamond` | Conditional | Branches based on edge conditions |
 | `house` | Human Gate | Waits for human approval |
 | `parallelogram` | Tool | Runs a shell command |
+| `component` | Parallel | Fans out to concurrent branches |
+| `tripleoctagon` | Fan-In | Collects results from parallel branches |
 | `Msquare` | Exit | Terminal node (pipeline complete) |
 
-### Edge Selection
+### Model Stylesheets
 
-When a node completes, the engine selects the next edge using a 5-step priority algorithm:
+Assign LLM models to nodes using CSS-like selectors instead of per-node attributes:
 
-1. **Condition match** -- edges whose condition evaluates to true
-2. **Preferred label** -- edges matching the handler's suggested label
-3. **Suggested IDs** -- edges targeting a handler-suggested node
-4. **Weight** -- highest-weight unconditional edge
-5. **Dead end** -- no valid edge found, pipeline ends
+```dot
+digraph Pipeline {
+    graph [
+        goal="Build feature X",
+        model_stylesheet="
+            * { llm_model: claude-sonnet-4-5; llm_provider: anthropic; }
+            .critical { llm_model: claude-opus-4-6; reasoning_effort: high; }
+            #final_review { llm_model: gpt-5.2; llm_provider: openai; }
+        "
+    ]
+    plan [shape=box]
+    implement [shape=box]
+    review [shape=box, class="critical"]
+    done [shape=Msquare]
+    // plan + implement get Sonnet, review gets Opus, #final_review gets GPT
+}
+```
+
+Specificity: `*` (0) < `shape` (1) < `.class` (2) < `#id` (3). Explicit node attributes always override stylesheets.
+
+### Parallel Execution
+
+Fan-out to concurrent branches and collect results:
+
+```dot
+digraph Parallel {
+    start [shape=ellipse]
+    fork [shape=component]
+    approach_a [shape=box, prompt="Solve using approach A"]
+    approach_b [shape=box, prompt="Solve using approach B"]
+    approach_c [shape=box, prompt="Solve using approach C"]
+    join [shape=tripleoctagon]
+    done [shape=Msquare]
+
+    start -> fork
+    fork -> approach_a
+    fork -> approach_b
+    fork -> approach_c
+    approach_a -> join
+    approach_b -> join
+    approach_c -> join
+    join -> done
+}
+```
+
+All branches run concurrently. Fan-in selects the best result using heuristic ranking (outcome > completion order > branch ID).
 
 ### Three-Layer Architecture
 
@@ -91,6 +141,48 @@ Unified LLM Client                  <-- Provider adapters (Anthropic, OpenAI, Ge
 Provider APIs                       <-- Claude, GPT, Gemini
 ```
 
+### High-Level API
+
+Use the SDK directly without pipelines:
+
+```python
+from attractor_llm.generate import generate, generate_object, stream
+
+# Simple text generation
+text = await generate(client, "claude-sonnet-4-5", "Explain recursion")
+
+# With automatic tool loop
+text = await generate(client, "claude-sonnet-4-5", "Read config.py",
+                      tools=[read_file_tool], max_rounds=5)
+
+# Structured JSON output
+data = await generate_object(client, "claude-sonnet-4-5",
+                              "Extract entities from: ...",
+                              schema={"type": "object", ...})
+
+# Streaming
+async for chunk in stream(client, "claude-sonnet-4-5", "Write a poem"):
+    print(chunk, end="")
+```
+
+### Subagent Spawning
+
+Delegate tasks to child agent sessions with depth limiting:
+
+```python
+from attractor_agent.subagent import spawn_subagent
+
+result = await spawn_subagent(
+    client=client,
+    prompt="Refactor the auth module",
+    parent_depth=0,
+    max_depth=3,
+    model="claude-sonnet-4-5",
+    provider="anthropic",
+)
+print(result.text)  # Child's response
+```
+
 ## Project Structure
 
 ```
@@ -102,6 +194,7 @@ src/
 │   ├── catalog.py               # Model catalog (7 models across 3 providers)
 │   ├── streaming.py             # StreamAccumulator for building responses from SSE
 │   ├── client.py                # Client with provider routing
+│   ├── generate.py              # High-level generate(), stream(), generate_object()
 │   └── adapters/
 │       ├── base.py              # ProviderAdapter protocol + ProviderConfig
 │       ├── anthropic.py         # Anthropic Messages API adapter
@@ -113,107 +206,165 @@ src/
 │   ├── events.py                # Event system (12 event kinds)
 │   ├── abort.py                 # Cooperative cancellation (AbortSignal)
 │   ├── truncation.py            # Two-pass output truncation
+│   ├── subagent.py              # Subagent spawning with depth limiting
+│   ├── profiles/                # Provider-specific agent configurations
+│   │   ├── anthropic.py         # Claude Code-style profile
+│   │   ├── openai.py            # codex-rs-style profile
+│   │   └── gemini.py            # gemini-cli-style profile
 │   └── tools/
 │       ├── registry.py          # Tool registry and execution pipeline
-│       └── core.py              # 6 tools: read_file, write_file, edit_file, shell, grep, glob
+│       ├── core.py              # 7 tools: read_file, write_file, edit_file, apply_patch, shell, grep, glob
+│       └── apply_patch.py       # Unified diff parser (OpenAI v4a format)
 │
 ├── attractor_pipeline/          # Layer 3: Pipeline Engine
 │   ├── graph.py                 # Graph, Node, Edge data model
 │   ├── conditions.py            # Condition expression evaluator (=, !=, &&)
 │   ├── backends.py              # CodergenBackend implementations (Direct + AgentLoop)
+│   ├── validation.py            # 12 graph lint rules
+│   ├── stylesheet.py            # CSS-like model selector engine
+│   ├── cli.py                   # CLI: attractor run/validate
 │   ├── parser/
 │   │   └── parser.py            # Custom recursive-descent DOT parser
 │   ├── engine/
-│   │   └── runner.py            # Core execution loop, edge selection, checkpoint
+│   │   ├── runner.py            # Core execution loop, edge selection, checkpoint
+│   │   └── subgraph.py          # Branch execution primitive for parallel
 │   └── handlers/
 │       ├── basic.py             # Start, Exit, Conditional, Tool handlers
 │       ├── codergen.py          # LLM handler + CodergenBackend protocol
-│       └── human.py             # Human-in-the-loop + Interviewer protocol
+│       ├── human.py             # Human-in-the-loop + Interviewer protocol
+│       └── parallel.py          # Parallel fan-out + Fan-in handlers
 │
 └── examples/
-    └── e2e_test.py              # End-to-end test against real Anthropic API
+    ├── e2e_test.py              # End-to-end test against real Anthropic API
+    ├── fibonacci.dot            # Simple plan -> implement pipeline
+    ├── code_review.dot          # Implement -> review with goal gate retry
+    └── research_then_build.dot  # Research -> design -> implement pipeline
 ```
 
 ## What's Implemented
 
-Mapped against the three StrongDM nlspecs.
+~90% of the three StrongDM nlspecs. Mapped below.
 
 ### Unified LLM Client Spec
 
 | Feature | Status | Spec Section |
 |---------|--------|-------------|
-| Client with provider routing | Done | §2.1-2.6 |
-| Anthropic Messages API adapter | Done | §7.3 |
-| OpenAI Responses API adapter | Done | §7.3 |
-| Google Gemini native API adapter | Done | §7.4 |
-| Request/Response data model | Done | §3 |
-| Streaming with StreamAccumulator | Done | §3.13 |
-| Error hierarchy with retryability | Done | §6 |
-| Retry with exponential backoff | Done | §6.6 |
-| Prompt caching (cache_control injection) | Done | §2.10 |
-| Reasoning token tracking | Done | §3.9 |
-| Model catalog | Done | §2.9 |
-| Tool calling (parallel execution) | Done | §5 |
-| High-level generate()/stream() API | Done | §4.3-4.6 |
-| generate_object() structured output | Done | §4.5 |
-| Middleware/interceptor chain | Not yet | §2.3 |
-| OpenAI-compatible adapter | Not yet | §7.10 |
+| Client with provider routing | Done | S2.1-2.6 |
+| Anthropic Messages API adapter | Done | S7.3 |
+| OpenAI Responses API adapter | Done | S7.3 |
+| Google Gemini native API adapter | Done | S7.4 |
+| Request/Response data model | Done | S3 |
+| Streaming with StreamAccumulator | Done | S3.13 |
+| Error hierarchy with retryability | Done | S6 |
+| Retry with exponential backoff | Done | S6.6 |
+| Prompt caching (cache_control injection) | Done | S2.10 |
+| Reasoning token tracking | Done | S3.9 |
+| Model catalog | Done | S2.9 |
+| Tool calling (parallel execution) | Done | S5 |
+| High-level generate()/stream() API | Done | S4.3-4.6 |
+| generate_object() structured output | Done | S4.5 |
+| Middleware/interceptor chain | Not yet | S2.3 |
+| OpenAI-compatible adapter | Not yet | S7.10 |
 
 ### Coding Agent Loop Spec
 
 | Feature | Status | Spec Section |
 |---------|--------|-------------|
-| Session with agentic loop | Done | §2.1-2.5 |
-| Tool registry and execution pipeline | Done | §3.8 |
-| Core tools (read/write/edit/shell/grep/glob) | Done | §3.3 |
-| Output truncation (char + line) | Done | §5.1-5.3 |
-| Event system (12 event kinds) | Done | §2.9 |
-| Steering/follow-up queues | Done | §2.6 |
-| Loop detection | Done | §2.10 |
-| Cooperative cancellation (AbortSignal) | Done | §2.8 |
-| Path confinement security | Done | (swarm-designed) |
-| Shell command deny-list | Done | (swarm-designed) |
-| Provider-aligned profiles (codex-rs, Claude Code, gemini-cli) | Done | §3.4-3.6 |
-| apply_patch v4a format parser | Done | Appendix A |
-| Subagent spawning | Done | §7 |
-| System prompt layering | Not yet | §6 |
-| Execution environment abstraction (Docker, K8s) | Not yet | §4 |
+| Session with agentic loop | Done | S2.1-2.5 |
+| Tool registry and execution pipeline | Done | S3.8 |
+| Core tools (read/write/edit/shell/grep/glob) | Done | S3.3 |
+| apply_patch v4a unified diff parser | Done | Appendix A |
+| Output truncation (char + line) | Done | S5.1-5.3 |
+| Event system (12 event kinds) | Done | S2.9 |
+| Steering/follow-up queues | Done | S2.6 |
+| Loop detection | Done | S2.10 |
+| Cooperative cancellation (AbortSignal) | Done | S2.8 |
+| Path confinement + symlink defense | Done | (multi-model designed) |
+| Shell command deny-list | Done | (multi-model designed) |
+| Provider profiles (Claude Code, codex-rs, gemini-cli) | Done | S3.4-3.6 |
+| Subagent spawning with depth limiting | Done | S7 |
+| System prompt layering | Not yet | S6 |
+| Execution environment abstraction (Docker, K8s) | Not yet | S4 |
 
 ### Attractor Pipeline Spec
 
 | Feature | Status | Spec Section |
 |---------|--------|-------------|
-| Custom DOT parser | Done | §2 |
-| Graph model (Node, Edge, Graph) | Done | §2.3-2.7 |
-| Execution engine (core loop) | Done | §3.2 |
-| 5-step edge selection algorithm | Done | §3.3 |
-| Goal gate with circuit breaker | Done | §3.4 |
-| Node retry with backoff | Done | §3.5 |
-| Checkpoint/resume | Done | §5.3 |
-| Condition expression evaluator | Done | §10 |
-| Handlers: start, exit, codergen, conditional, tool, human | Done | §4.3-4.10 |
-| CodergenBackend protocol + implementations | Done | §4.5 |
-| Interviewer protocol (AutoApprove, Console) | Done | §6 |
-| Cooperative cancellation | Done | §9.5 |
-| Graph validation/lint rules (12 rules) | Not yet | §7 |
-| Model stylesheet parser (CSS-like selectors) | Not yet | §8 |
-| Parallel handler (fan-out) | Not yet | §4.8 |
-| Fan-in handler (join) | Not yet | §4.9 |
-| Manager loop handler (supervisor) | Not yet | §4.11 |
-| HTTP server mode + SSE events | Not yet | §9.5-9.6 |
-| AST transforms (variable expansion, preamble) | Not yet | §9.1-9.3 |
-| Fidelity resume preamble generation | Not yet | §5.4 |
+| Custom DOT parser | Done | S2 |
+| Graph model (Node, Edge, Graph) | Done | S2.3-2.7 |
+| Execution engine (core loop) | Done | S3.2 |
+| 5-step edge selection algorithm | Done | S3.3 |
+| Goal gate with circuit breaker | Done | S3.4 |
+| Node retry with backoff | Done | S3.5 |
+| Checkpoint/resume | Done | S5.3 |
+| Condition expression evaluator | Done | S10 |
+| Handlers: start, exit, codergen, conditional, tool, human | Done | S4.3-4.10 |
+| Parallel handler (fan-out) | Done | S4.8 |
+| Fan-in handler (join with heuristic selection) | Done | S4.9 |
+| CodergenBackend protocol + implementations | Done | S4.5 |
+| Interviewer protocol (AutoApprove, Console) | Done | S6 |
+| Cooperative cancellation | Done | S9.5 |
+| Graph validation/lint rules (12 rules) | Done | S7 |
+| Model stylesheet parser (CSS-like selectors) | Done | S8 |
+| CLI (run + validate) | Done | -- |
+| Manager loop handler (supervisor) | Not yet | S4.11 |
+| HTTP server mode + SSE events | Not yet | S9.5-9.6 |
+| AST transforms (variable expansion, preamble) | Not yet | S9.1-9.3 |
+| Fidelity resume preamble generation | Not yet | S5.4 |
+
+## Testing
+
+```bash
+# Run all unit tests (303 tests, ~2s, no API keys needed)
+uv run python -m pytest tests/ -q
+
+# Run end-to-end integration tests (8 tests, requires ANTHROPIC_API_KEY)
+uv run python -m pytest tests/test_e2e_integration.py -v -s
+
+# Run the quick e2e pipeline test
+ANTHROPIC_API_KEY=sk-... uv run python examples/e2e_test.py
+```
+
+### Test Coverage
+
+| Test Type | Count | What It Covers |
+|-----------|-------|---------------|
+| Unit tests (mock) | 303 | Types, errors, retry, catalog, streaming, tools, parser, conditions, validation, stylesheet, profiles, subagent, apply_patch, generate API, parallel handlers |
+| E2E integration (real API) | 8 | Agent writes/edits real files, pipeline creates code on disk, multi-stage output chaining, generate() with tool loop, structured output, subagent with tools, software factory |
+| Live provider validation | 9 | generate + generate_object + subagent across Anthropic + OpenAI + Gemini |
+
+### What's Proven End-to-End
+
+- Agent writes `hello.py` with `greet()` function to disk via agentic tool loop
+- Agent reads `config.py`, uses `edit_file` to change a port, preserves other lines
+- Pipeline node drives AgentLoopBackend which creates `add.py` on disk
+- Plan stage produces output that chains into implement stage (real context passing)
+- `generate()` reads a file via tool loop and extracts a secret code
+- `generate_object()` returns structured JSON from natural language
+- Subagent writes files to disk using delegated tool access
+- Software factory pipeline produces working palindrome checker
 
 ## Security
 
-The implementation includes security hardening identified during multi-model peer review:
+Security hardening identified during multi-model peer review (Claude, GPT, Gemini):
 
-- **Path confinement**: All file tools validate paths against an allowed-roots list. Operations outside the allowed directories are rejected.
-- **Shell command deny-list**: Dangerous patterns (`rm -rf /`, `mkfs`, fork bombs, `sudo rm`) are blocked before execution.
-- **Shell variable injection prevention**: Context values are escaped with `shlex.quote()` before substitution into shell commands.
-- **Environment variable filtering**: Sensitive variables (matching `_KEY`, `_SECRET`, `_TOKEN`, `_PASSWORD` suffixes) are stripped from child process environments.
-- **Non-blocking shell execution**: Shell commands run in a thread pool via `asyncio.to_thread()` to avoid blocking the event loop.
-- **No traceback leakage**: Tool errors sent to the LLM contain only the exception message, not internal stack traces.
+- **Path confinement**: All file tools validate paths against an allowed-roots list
+- **Symlink traversal defense**: Resolved paths verified under base directory via `relative_to()`
+- **Shell command deny-list**: Dangerous patterns (`rm -rf /`, `mkfs`, fork bombs) blocked
+- **Shell variable injection prevention**: Context values escaped with `shlex.quote()`
+- **Environment variable filtering**: Sensitive variables (`_KEY`, `_SECRET`, `_TOKEN`) stripped
+- **Non-blocking shell execution**: Commands run via `asyncio.to_thread()`
+- **No traceback leakage**: Tool errors contain only the exception message
+- **apply_patch context verification**: Verifies diff context lines match actual file content before applying
+
+## How This Was Built
+
+This implementation was built using [Amplifier](https://github.com/microsoft/amplifier) with a multi-model peer review process:
+
+- **Design phase**: Each provider's model (Claude Opus 4.6, GPT O3, Gemini) reviewed the profile designed for its own provider
+- **Implementation phase**: Code reviewed by 2-3 models per feature, with cross-reviews where one model verifies another's fixes
+- **Validation phase**: Every feature tested with mock tests AND live API calls against all 3 providers
+- **Total**: 27+ swarm review rounds across Claude (Opus 4.6, Sonnet 4.5), GPT (O3, 5.2 codex), and Gemini
 
 ## Development
 
@@ -227,11 +378,14 @@ uv run ruff check src/
 # Run type checker
 uv run pyright src/
 
-# Run pipeline integration tests
-uv run python tests/test_pipeline.py
+# Run all tests
+uv run python -m pytest tests/ -v
 
-# Run end-to-end test (requires API key)
-ANTHROPIC_API_KEY=sk-... uv run python examples/e2e_test.py
+# Run a pipeline
+uv run python -m attractor_pipeline.cli run examples/fibonacci.dot --no-tools
+
+# Validate a DOT file
+uv run python -m attractor_pipeline.cli validate examples/fibonacci.dot
 ```
 
 ## Credits
