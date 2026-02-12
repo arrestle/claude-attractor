@@ -1,0 +1,46 @@
+// Conditional Branching with Goal Gate
+//
+// Implements a review loop: code is generated, then reviewed.
+// If the review fails, the goal gate redirects back to the
+// implementation node for another attempt. A circuit breaker
+// limits retries to prevent infinite loops.
+//
+// Run: uv run python -m attractor_pipeline.cli run examples/conditional_goal_gate.dot --no-tools
+// Shapes: diamond = conditional, Msquare with goal_gate = quality gate
+
+digraph ConditionalGoalGate {
+    graph [goal="Write a thread-safe LRU cache in Python", max_goal_gate_redirects="3"]
+
+    start [shape=ellipse]
+
+    plan [
+        shape=box,
+        prompt="Create a brief design for: $goal. Cover the data structures and thread safety approach."
+    ]
+
+    implement [
+        shape=box,
+        prompt="Write the complete implementation for: $goal based on the design. Include docstrings and type hints. Code only."
+    ]
+
+    review [
+        shape=diamond,
+        prompt="Review this implementation. Does it correctly handle thread safety? Are there race conditions? Is the LRU eviction correct?"
+    ]
+
+    fix [
+        shape=box,
+        prompt="Fix the issues found in the review. Output the corrected code only."
+    ]
+
+    done [
+        shape=Msquare,
+        goal_gate="outcome = success",
+        retry_target="implement"
+    ]
+
+    start -> plan -> implement -> review
+    review -> done [condition="outcome = success", label="approved"]
+    review -> fix [condition="outcome = fail", label="needs fixes"]
+    fix -> review
+}

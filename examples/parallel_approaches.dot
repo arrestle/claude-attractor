@@ -1,0 +1,43 @@
+// Parallel Fan-Out / Fan-In
+//
+// Three approaches to the same problem run concurrently.
+// The fan-in node picks the best result using heuristic ranking.
+//
+// Run: uv run python -m attractor_pipeline.cli run examples/parallel_approaches.dot --no-tools
+// Shapes: component = parallel fork, tripleoctagon = fan-in join
+
+digraph ParallelApproaches {
+    graph [goal="Write a Python function that finds the longest palindromic substring"]
+
+    start [shape=ellipse]
+
+    fork [shape=component, label="Fan out"]
+
+    approach_dp [
+        shape=box,
+        prompt="Write a dynamic programming solution for: $goal. Include time complexity analysis. Code only."
+    ]
+
+    approach_expand [
+        shape=box,
+        prompt="Write an expand-around-center solution for: $goal. Include time complexity analysis. Code only."
+    ]
+
+    approach_manacher [
+        shape=box,
+        prompt="Write Manacher's algorithm for: $goal. Include time complexity analysis. Code only."
+    ]
+
+    join [shape=tripleoctagon, label="Pick best"]
+
+    done [shape=Msquare]
+
+    start -> fork
+    fork -> approach_dp
+    fork -> approach_expand
+    fork -> approach_manacher
+    approach_dp -> join
+    approach_expand -> join
+    approach_manacher -> join
+    join -> done
+}

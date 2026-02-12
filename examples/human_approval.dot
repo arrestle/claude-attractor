@@ -1,0 +1,36 @@
+// Human-in-the-Loop Approval Gate
+//
+// A human gate (house shape) pauses the pipeline and waits for
+// approval before proceeding. Use ConsoleInterviewer for interactive
+// terminal approval, or AutoApproveInterviewer for testing.
+//
+// Run: uv run python -m attractor_pipeline.cli run examples/human_approval.dot --no-tools
+// Shape: house = human gate (wait.human handler)
+
+digraph HumanApproval {
+    graph [goal="Deploy database migration to production"]
+
+    start [shape=ellipse]
+
+    generate_migration [
+        shape=box,
+        prompt="Generate a SQL migration for: $goal. Include UP and DOWN migrations."
+    ]
+
+    review_gate [
+        shape=house,
+        prompt="Review the migration above. Does it look safe to apply to production?"
+    ]
+
+    apply [
+        shape=box,
+        prompt="Write the deployment script that applies this migration safely with rollback support."
+    ]
+
+    done [shape=Msquare]
+
+    start -> generate_migration -> review_gate
+    review_gate -> apply [label="approved"]
+    review_gate -> generate_migration [label="denied"]
+    apply -> done
+}

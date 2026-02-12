@@ -1,0 +1,27 @@
+// Manager / Supervisor Loop
+//
+// A hexagon node runs a child pipeline and retries if the result
+// doesn't meet the success condition. The child pipeline is loaded
+// from a separate .dot file.
+//
+// Run: uv run python -m attractor_pipeline.cli run examples/supervisor_loop.dot --no-tools
+//
+// Requires: examples/supervisor_child.dot (the child pipeline)
+
+digraph SupervisorLoop {
+    graph [goal="Write a robust input validation module"]
+
+    start [shape=ellipse]
+
+    supervisor [
+        shape=hexagon,
+        label="Supervisor",
+        child_graph="examples/supervisor_child.dot",
+        max_iterations="3",
+        success_condition="status=completed"
+    ]
+
+    done [shape=Msquare]
+
+    start -> supervisor -> done
+}

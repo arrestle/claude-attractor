@@ -1,0 +1,42 @@
+// Software Factory Pipeline
+//
+// Full end-to-end: research -> design -> implement -> test -> review.
+// Demonstrates multi-stage context accumulation where each stage
+// builds on the output of the previous one.
+//
+// Run: uv run python -m attractor_pipeline.cli run examples/software_factory.dot --no-tools
+
+digraph SoftwareFactory {
+    graph [goal="Build a Python CLI tool that converts CSV files to JSON"]
+
+    start [shape=ellipse]
+
+    research [
+        shape=box,
+        prompt="Research the best approach for: $goal. Consider existing libraries (csv, json modules), edge cases (encoding, nested data, large files), and CLI argument parsing (argparse). Summarize in 5 bullet points."
+    ]
+
+    design [
+        shape=box,
+        prompt="Based on the research, design the module structure for: $goal. Define the functions, their signatures, and how they compose. Include error handling strategy."
+    ]
+
+    implement [
+        shape=box,
+        prompt="Implement the complete solution for: $goal based on the design. Include: argument parsing, CSV reading, JSON output, error handling, and a main() entry point. Production-quality code only."
+    ]
+
+    write_tests [
+        shape=box,
+        prompt="Write pytest tests for the implementation. Cover: happy path, empty CSV, missing file, malformed CSV, custom delimiter. Include at least 5 test cases."
+    ]
+
+    review [
+        shape=box,
+        prompt="Review the implementation and tests together. Check for: correctness, edge cases, error handling, code style, test coverage. Provide a summary verdict."
+    ]
+
+    done [shape=Msquare]
+
+    start -> research -> design -> implement -> write_tests -> review -> done
+}

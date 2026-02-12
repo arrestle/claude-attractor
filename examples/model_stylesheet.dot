@@ -1,0 +1,37 @@
+// Model Stylesheet
+//
+// Assign LLM models to nodes using CSS-like selectors instead of
+// per-node attributes. Specificity: * (0) < shape (1) < .class (2) < #id (3).
+// Explicit node attributes always override stylesheet values.
+//
+// Run: uv run python -m attractor_pipeline.cli run examples/model_stylesheet.dot --no-tools
+
+digraph ModelStylesheet {
+    graph [
+        goal="Build a URL shortener service",
+        model_stylesheet="
+            * { llm_model: claude-sonnet-4-5; llm_provider: anthropic; }
+            box { reasoning_effort: medium; }
+            .critical { llm_model: claude-opus-4-6; reasoning_effort: high; }
+            #security_review { llm_model: gpt-5.2; llm_provider: openai; }
+        "
+    ]
+
+    start [shape=ellipse]
+
+    // Gets * defaults: claude-sonnet-4-5
+    plan [shape=box, prompt="Create an architecture plan for: $goal"]
+
+    // Gets box defaults: claude-sonnet-4-5 + reasoning_effort: medium
+    implement [shape=box, prompt="Write the Python code for: $goal based on the plan"]
+
+    // Gets .critical override: claude-opus-4-6 + reasoning_effort: high
+    code_review [shape=box, class="critical", prompt="Review this code for bugs, security issues, and best practices"]
+
+    // Gets #id override: gpt-5.2 on openai (cross-provider!)
+    security_review [shape=box, prompt="Perform a security audit of this code. Check for OWASP Top 10."]
+
+    done [shape=Msquare]
+
+    start -> plan -> implement -> code_review -> security_review -> done
+}

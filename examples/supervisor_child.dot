@@ -1,0 +1,24 @@
+// Child pipeline for supervisor_loop.dot
+//
+// This is the pipeline that the supervisor runs and evaluates.
+// $goal is expanded from the parent pipeline's context.
+
+digraph ChildPipeline {
+    graph [goal="$goal"]
+
+    start [shape=ellipse]
+
+    design [
+        shape=box,
+        prompt="Design the module interface for: $goal. List the functions with their signatures and docstrings."
+    ]
+
+    implement [
+        shape=box,
+        prompt="Implement the module based on the design above. Include type hints and error handling. Code only."
+    ]
+
+    done [shape=Msquare]
+
+    start -> design -> implement -> done
+}
