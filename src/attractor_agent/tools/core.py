@@ -600,6 +600,44 @@ GLOB = _make_tool(
 
 
 # ------------------------------------------------------------------ #
+# apply_patch (unified diff format)
+# ------------------------------------------------------------------ #
+
+
+async def _apply_patch(patch: str, working_dir: str | None = None) -> str:
+    """Apply a unified diff patch."""
+    from attractor_agent.tools.apply_patch import _apply_patch_execute
+
+    return await _apply_patch_execute(patch, working_dir)
+
+
+APPLY_PATCH = Tool(
+    name="apply_patch",
+    description=(
+        "Apply a unified diff patch to files. Accepts standard unified "
+        "diff format (--- a/file, +++ b/file, @@ hunks). Supports "
+        "file creation, deletion, and modification. Use for making "
+        "code changes via patches instead of edit_file."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "patch": {
+                "type": "string",
+                "description": "Unified diff text to apply",
+            },
+            "working_dir": {
+                "type": "string",
+                "description": "Base directory for paths. Default: cwd",
+            },
+        },
+        "required": ["patch"],
+    },
+    handler=_apply_patch,
+)
+
+
+# ------------------------------------------------------------------ #
 # All core tools as a list
 # ------------------------------------------------------------------ #
 
@@ -607,6 +645,17 @@ ALL_CORE_TOOLS: list[Tool] = [
     READ_FILE,
     WRITE_FILE,
     EDIT_FILE,
+    SHELL,
+    GREP,
+    GLOB,
+]
+
+# Extended tools list including apply_patch (used by OpenAI profile)
+ALL_TOOLS_WITH_PATCH: list[Tool] = [
+    READ_FILE,
+    WRITE_FILE,
+    EDIT_FILE,
+    APPLY_PATCH,
     SHELL,
     GREP,
     GLOB,
