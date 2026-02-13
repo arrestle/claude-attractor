@@ -60,6 +60,17 @@ def main() -> None:
         default=None,
         help="Directory for logs and checkpoints",
     )
+    run_parser.add_argument(
+        "--docker",
+        action="store_true",
+        help="Run agent tools inside a Docker container (sandboxed)",
+    )
+    run_parser.add_argument(
+        "--docker-image",
+        type=str,
+        default="python:3.12-slim",
+        help="Docker image to use (default: python:3.12-slim)",
+    )
 
     # --- validate command ---
     val_parser = subparsers.add_parser("validate", help="Validate a DOT pipeline file")
@@ -209,6 +220,25 @@ async def _cmd_run(args: argparse.Namespace) -> None:
     client.register_adapter(provider, adapter)
     print(f"Provider: {provider} ({model})")
 
+    # Set up execution environment
+    docker_env = None
+    if getattr(args, "docker", False):
+        from attractor_agent.environment import DockerEnvironment
+        from attractor_agent.tools.core import set_allowed_roots, set_environment
+
+        docker_image = getattr(args, "docker_image", "python:3.12-slim")
+        docker_env = DockerEnvironment(image=docker_image)
+        print(f"Environment: Docker ({docker_image})")
+        print("Starting container...")
+        await docker_env.start()
+        set_environment(docker_env)
+        # Set allowed roots to the container workspace so path
+        # confinement doesn't block container paths
+        set_allowed_roots([docker_env._workspace, "/tmp"])
+        print(f"Container: {docker_env.container_id}")
+    else:
+        print("Environment: Local")
+
     # Set up backend
     if args.no_tools:
         backend = DirectLLMBackend(
@@ -268,6 +298,16 @@ async def _cmd_run(args: argparse.Namespace) -> None:
             print(f"--- {node_id} output ---")
             print(str(value)[:2000])
             print()
+
+    # Clean up Docker container if used
+    if docker_env:
+        print("Stopping Docker container...")
+        await docker_env.stop()
+        from attractor_agent.environment import LocalEnvironment
+        from attractor_agent.tools.core import set_environment
+
+        set_environment(LocalEnvironment())
+        print("Container stopped.")
 
     if result.status == PipelineStatus.COMPLETED:
         print("Pipeline completed successfully.")

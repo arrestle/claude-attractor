@@ -1,0 +1,99 @@
+// Spec-Driven Development Pipeline
+//
+// Point this at a project with natural language spec files and it
+// automatically: catalogs specs -> validates them -> builds the app -> tests it.
+//
+// Usage:
+//   cd your-project/        # contains specs/*.md or similar
+//   attractor run path/to/spec_driven_dev.dot
+//
+// The pipeline stops early if specs fail validation (errors found).
+// Otherwise it flows straight through: validate -> create -> test.
+
+digraph spec_driven_dev {
+
+    graph [
+        goal="Read all natural language specs in this project, validate them, build the described application, and verify it with tests"
+        model_stylesheet="
+            * { llm_model: claude-sonnet-4-5; llm_provider: anthropic; }
+            .architect { reasoning_effort: high; }
+        "
+    ]
+
+    // ── Entry ──────────────────────────────────────────────────
+
+    start [shape=ellipse label="Start"]
+
+    // ── Phase 1: Catalog ───────────────────────────────────────
+    //
+    // Read every spec file, build a dependency graph, determine
+    // implementation order. This output feeds every later phase.
+
+    catalog [shape=box label="Catalog Specs"
+        prompt="Find and read every natural language specification file in this project.\n\nSearch locations:\n- specs/, spec/, docs/ directories\n- Any *.md or *.txt file with 'spec' in the name\n- README files that describe requirements\n\nFor each spec file found, extract:\n1. File path and name\n2. The component or feature it describes\n3. All functional requirements (what it MUST do)\n4. All non-functional requirements (performance, security, constraints)\n5. Acceptance criteria (how to verify correctness)\n6. Dependencies on other specs or external systems\n\nProduce a structured catalog:\n- Total specs found with their file paths\n- Dependency graph between specs\n- Suggested implementation order (topological sort by dependencies)\n- Summary of the complete system being described\n- Any ambiguities or open questions noticed during cataloging"
+    ]
+
+    // ── Phase 2: Validate ──────────────────────────────────────
+    //
+    // Check specs for completeness, consistency, gaps. Outputs a
+    // verdict: PASS / WARN / FAIL. FAIL stops the pipeline.
+
+    validate [shape=box label="Validate Specs"
+        prompt="Using the spec catalog:\n$codergen.catalog.output\n\nValidate every specification thoroughly.\n\n1. COMPLETENESS - Are requirements specific and testable? Acceptance criteria defined? Error and edge cases covered? Data formats and boundaries specified?\n\n2. CONSISTENCY - Do specs contradict each other? Are shared terms defined the same way? Do interface boundaries match where specs connect?\n\n3. DEPENDENCIES - Are all referenced specs present? Circular dependencies? External dependencies documented?\n\n4. FEASIBILITY - Ambiguous requirements? Conflicting constraints? Realistic performance targets?\n\n5. GAPS - Missing functionality? Deployment and config specs? Error handling and recovery?\n\nClassify each finding as:\n  ERROR   - Blocks development, must fix before building\n  WARNING - Should fix, risks incorrect implementation\n  INFO    - Improvement suggestion\n\nEnd your response with EXACTLY one of these verdicts on its own line:\n  verdict = pass\n  verdict = warn\n  verdict = fail"
+    ]
+
+    // ── Gate: Stop on validation failure ───────────────────────
+
+    check_validation [shape=diamond label="Specs Valid?"]
+
+    validation_failed [shape=Msquare label="Specs Need Work"
+        prompt="Validation found blocking errors. Fix the spec files and re-run."
+    ]
+
+    // ── Phase 3: Plan Architecture ─────────────────────────────
+
+    plan [shape=box class="architect" label="Plan Architecture"
+        prompt="Based on the validated spec catalog:\n$codergen.catalog.output\n\nDesign the complete application architecture.\n\n1. PROJECT STRUCTURE - Directory layout with exact paths, every file with its purpose, package organization\n\n2. DATA MODEL - All entities with attributes and types, relationships, validation rules from specs\n\n3. INTERFACES - Public API per component, complete function signatures with types, input/output contracts and error types\n\n4. PATTERNS - Design patterns chosen with spec justification, error handling strategy, configuration approach\n\n5. IMPLEMENTATION ORDER - Ordered file list, dependencies between steps, what to build first for fastest feedback\n\nBe maximally concrete. Every file path, function signature, and type must be specific. This plan is followed exactly by the next step."
+    ]
+
+    // ── Phase 4: Implement ─────────────────────────────────────
+
+    implement [shape=box label="Implement"
+        system_prompt="You are a senior software engineer. Implement production-quality code following the architecture plan exactly. Every spec requirement must be addressed. No stubs, no TODOs, no placeholders."
+        prompt="Implement the application following this architecture plan:\n$codergen.plan.output\n\nOriginal spec catalog for reference:\n$codergen.catalog.output\n\nFor each file in the plan:\n1. Create the file at the exact specified path\n2. Implement all functions with complete logic\n3. Add type hints on all public interfaces\n4. Add docstrings referencing which spec requirement each function satisfies\n5. Include proper error handling per the plan\n\nAfter creating all files, verify imports resolve and there are no circular dependencies."
+    ]
+
+    // ── Phase 5: Verify implementation against specs ───────────
+
+    verify_impl [shape=box label="Verify Against Specs"
+        prompt="The application has been implemented. Verify it against the original specs.\n\nSpec catalog:\n$codergen.catalog.output\n\nFor each spec requirement:\n1. Locate the code that implements it\n2. Verify the implementation matches precisely\n3. Check edge cases are handled\n\nProduce a traceability matrix:\n  Spec File | Requirement | Code Location | Status (DONE / PARTIAL / MISSING)\n\nIf any requirements are PARTIAL or MISSING, implement them now.\n\nOutput the matrix and overall spec coverage percentage."
+    ]
+
+    // ── Phase 6: Generate tests from specs ─────────────────────
+
+    gen_tests [shape=box label="Generate Tests"
+        prompt="Based on the spec catalog and the code now in this project:\n$codergen.catalog.output\n\nGenerate tests that verify every spec requirement.\n\n1. UNIT TESTS - One file per component, test every public function, cover happy path + error + boundary cases from specs\n\n2. INTEGRATION TESTS - Component interactions, data flow across boundaries, end-to-end workflows from specs\n\n3. ACCEPTANCE TESTS - One test per acceptance criterion, named test_<spec>_<requirement>_<scenario>, comment citing spec file and requirement\n\nUse pytest. Each test must be independent. Assert messages must explain which spec requirement failed. Write all test files to tests/."
+    ]
+
+    // ── Phase 7: Run tests, fix what breaks ────────────────────
+
+    run_tests [shape=box label="Run and Fix Tests"
+        prompt="Run the test suite:\n  python -m pytest tests/ -v\n\nFor each failure, determine if the bug is in:\n  a) The test (fix the test)\n  b) The implementation (fix the code)\n  c) The spec (report as unresolvable)\n\nFix and re-run until all tests pass or only spec issues remain.\n\nOutput a final report:\n- Total: X passed, Y failed, Z skipped\n- Spec coverage: which requirements have passing tests\n- Unresolvable: spec contradictions found during testing\n- Confidence: HIGH / MEDIUM / LOW"
+    ]
+
+    // ── Exit ───────────────────────────────────────────────────
+
+    done [shape=Msquare label="Complete"
+        goal_gate="All specs have been validated, the application is implemented, and tests verify the spec requirements"
+        retry_target="implement"
+    ]
+
+    // ── Flow ───────────────────────────────────────────────────
+
+    start -> catalog -> validate -> check_validation
+
+    check_validation -> validation_failed [condition="codergen.validate.verdict = fail"]
+    check_validation -> plan               [condition="codergen.validate.verdict != fail"]
+
+    plan -> implement -> verify_impl -> gen_tests -> run_tests -> done
+}

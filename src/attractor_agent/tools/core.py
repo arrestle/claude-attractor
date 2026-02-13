@@ -17,15 +17,38 @@ Spec reference: coding-agent-loop §3.3.
 
 from __future__ import annotations
 
-import asyncio
 import fnmatch
 import os
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
+from attractor_agent.environment import (
+    ExecutionEnvironment,
+    LocalEnvironment,
+)
 from attractor_llm.types import Tool
+
+# ------------------------------------------------------------------ #
+# Execution Environment
+# ------------------------------------------------------------------ #
+
+# Module-level environment used by all tools. Default: LocalEnvironment
+# (direct host access, identical to pre-abstraction behavior).
+# Swap to DockerEnvironment or KubernetesEnvironment for sandboxing.
+_environment: ExecutionEnvironment = LocalEnvironment()
+
+
+def set_environment(env: ExecutionEnvironment) -> None:
+    """Set the execution environment for all tools."""
+    global _environment  # noqa: PLW0603
+    _environment = env
+
+
+def get_environment() -> ExecutionEnvironment:
+    """Get the current execution environment."""
+    return _environment
+
 
 # ------------------------------------------------------------------ #
 # Security: Path confinement
@@ -149,17 +172,18 @@ async def _read_file(
     """Read a file with optional line offset and limit."""
     file_path = Path(path).expanduser().resolve()
 
-    # Security: path confinement check
-    error = _check_path_allowed(file_path)
-    if error:
-        raise PermissionError(error)
+    # Security: path confinement check (skip for non-local environments
+    # where the container IS the sandbox)
+    if isinstance(_environment, LocalEnvironment):
+        error = _check_path_allowed(file_path)
+        if error:
+            raise PermissionError(error)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        if not file_path.is_file():
+            raise IsADirectoryError(f"Not a file: {path}")
 
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {path}")
-    if not file_path.is_file():
-        raise IsADirectoryError(f"Not a file: {path}")
-
-    text = file_path.read_text(encoding="utf-8", errors="replace")
+    text = await _environment.read_file(str(file_path))
 
     lines = text.split("\n")
     total = len(lines)
@@ -219,13 +243,13 @@ async def _write_file(path: str, content: str) -> str:
     """Write content to a file, creating directories as needed."""
     file_path = Path(path).expanduser().resolve()
 
-    # Security: path confinement check
-    error = _check_path_allowed(file_path)
-    if error:
-        raise PermissionError(error)
+    # Security: path confinement (skip for non-local -- container IS sandbox)
+    if isinstance(_environment, LocalEnvironment):
+        error = _check_path_allowed(file_path)
+        if error:
+            raise PermissionError(error)
 
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(content, encoding="utf-8")
+    await _environment.write_file(str(file_path), content)
 
     line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
     return f"Wrote {len(content)} bytes ({line_count} lines) to {path}"
@@ -268,15 +292,15 @@ async def _edit_file(
     """Replace a string in a file."""
     file_path = Path(path).expanduser().resolve()
 
-    # Security: path confinement check
-    error = _check_path_allowed(file_path)
-    if error:
-        raise PermissionError(error)
+    # Security: path confinement (skip for non-local -- container IS sandbox)
+    if isinstance(_environment, LocalEnvironment):
+        error = _check_path_allowed(file_path)
+        if error:
+            raise PermissionError(error)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
 
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {path}")
-
-    text = file_path.read_text(encoding="utf-8")
+    text = await _environment.read_file(str(file_path))
 
     if old_string not in text:
         raise ValueError(f"old_string not found in {path}")
@@ -293,7 +317,7 @@ async def _edit_file(
     else:
         text = text.replace(old_string, new_string)
 
-    file_path.write_text(text, encoding="utf-8")
+    await _environment.write_file(str(file_path), text)
 
     label = "all occurrences" if replace_all else "1 occurrence"
     return f"Edited {path}: replaced {label}"
@@ -346,8 +370,7 @@ async def _shell(
 ) -> str:
     """Execute a shell command and return stdout + stderr.
 
-    Runs in a thread to avoid blocking the event loop.
-    Uses start_new_session=True so timeouts kill the process tree.
+    Delegates to the execution environment (local or Docker).
     """
     # Security: check deny-list
     blocked = _check_shell_command(command)
@@ -362,36 +385,17 @@ async def _shell(
         raise PermissionError(f"Shell working_dir outside allowed roots: {path_error}")
     filtered_env = _filter_env()
 
-    def _run() -> str:
-        try:
-            result = subprocess.run(  # noqa: S603
-                ["bash", "-c", command],  # noqa: S607
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=cwd,
-                env=filtered_env,
-                start_new_session=True,  # enables process-tree cleanup
-            )
-        except subprocess.TimeoutExpired:
-            raise  # will be caught by asyncio.to_thread caller
-        except OSError as e:
-            return f"Error executing command: {e}"
+    result = await _environment.exec_shell(
+        command,
+        timeout=timeout,
+        working_dir=cwd,
+        env=filtered_env,
+    )
 
-        output_parts: list[str] = []
-        if result.stdout:
-            output_parts.append(result.stdout)
-        if result.stderr:
-            output_parts.append(f"STDERR:\n{result.stderr}")
-        if result.returncode != 0:
-            output_parts.append(f"Exit code: {result.returncode}")
+    if result.returncode == -1 and "timed out" in result.stderr:
+        raise RuntimeError(f"Command timed out after {timeout}s: {command}")
 
-        return "\n".join(output_parts) if output_parts else "(no output)"
-
-    try:
-        return await asyncio.to_thread(_run)
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"Command timed out after {timeout}s: {command}") from e
+    return result.output
 
 
 SHELL = _make_tool(

@@ -18,6 +18,8 @@ class StartPipelineRequest(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict, description="Initial context variables")
     provider: str | None = Field(None, description="LLM provider override")
     model: str | None = Field(None, description="LLM model override")
+    docker: bool = Field(False, description="Run tools inside Docker")
+    docker_image: str = Field("python:3.12-slim", description="Docker image to use")
 
 
 class AnswerRequest(BaseModel):

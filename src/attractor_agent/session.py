@@ -56,6 +56,10 @@ class SessionConfig:
     loop_detection_window: int | None = None
     loop_detection_threshold: int | None = None
 
+    # Execution environment: "local" (default) or "docker"
+    environment: str = "local"
+    docker_image: str = "python:3.12-slim"
+
 
 @dataclass
 class _LoopDetector:
