@@ -80,6 +80,8 @@ class PipelineRun:
     # Done event -- checked by late-connecting SSE clients
     _done_event: asyncio.Event = field(default_factory=asyncio.Event)
     _is_closed: bool = False
+    # Event history buffer -- replayed to late-subscribing SSE clients
+    _event_history: list[SSEEvent] = field(default_factory=list)
 
     # Pending human gate questions
     pending_questions: dict[str, PendingQuestion] = field(default_factory=dict)
@@ -90,8 +92,19 @@ class PipelineRun:
         return self.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED)
 
     def subscribe(self) -> asyncio.Queue[SSEEvent | None]:
-        """Create a new SSE subscriber queue."""
+        """Create a new SSE subscriber queue.
+
+        Replays buffered event history so late-subscribing clients
+        don't miss events emitted before they connected (e.g.,
+        pipeline.started emitted before SSE client opens connection).
+        """
         q: asyncio.Queue[SSEEvent | None] = asyncio.Queue(maxsize=1000)
+        # Replay history for late subscribers
+        for event in self._event_history:
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                break
         self._event_subscribers.append(q)
         return q
 
@@ -101,8 +114,9 @@ class PipelineRun:
             self._event_subscribers.remove(q)
 
     def emit(self, event_type: str, data: dict[str, Any]) -> None:
-        """Emit an SSE event to all subscribers."""
+        """Emit an SSE event to all subscribers and buffer for replay."""
         event = SSEEvent(event_type=event_type, data=data)
+        self._event_history.append(event)
         for q in self._event_subscribers:
             try:
                 q.put_nowait(event)

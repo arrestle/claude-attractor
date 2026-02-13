@@ -32,12 +32,10 @@ async def sse_stream(run: PipelineRun) -> AsyncIterator[str]:
             media_type="text/event-stream",
         )
     """
-    # Late-connect check: if pipeline already finished, return status and exit
+    # Late-connect: if pipeline already finished, replay full event history
     if run.is_terminal:
-        yield format_sse_event(SSEEvent(
-            event_type=f"pipeline.{run.status.value}",
-            data={"id": run.id, "status": run.status.value},
-        ))
+        for event in run._event_history:
+            yield format_sse_event(event)
         return
 
     queue = run.subscribe()
