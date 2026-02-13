@@ -7,6 +7,8 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.0",
     "anyio>=4.0",
+    "starlette>=0.40",
+    "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -26,7 +28,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/attractor_llm", "src/attractor_agent", "src/attractor_pipeline"]
+packages = ["src/attractor_llm", "src/attractor_agent", "src/attractor_pipeline", "src/attractor_server"]
 
 [tool.pyright]
 pythonVersion = "3.12"
