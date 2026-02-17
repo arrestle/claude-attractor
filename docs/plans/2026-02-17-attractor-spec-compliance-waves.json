@@ -1,0 +1,166 @@
+{
+  "metadata": {
+    "title": "Attractor Spec Compliance - Implementation Wave Plan",
+    "generated": "2026-02-17",
+    "source_audit": "3-spec attractor compliance audit (unified-llm-spec, coding-agent-loop-spec, attractor-spec)",
+    "total_fail": 25,
+    "total_partial": 34,
+    "total_items": 59,
+    "wave_range": "wave9 through wave16 (continues from existing waves 1-8)",
+    "recipe": "recipes/wave-implementation.yaml"
+  },
+  "waves": [
+    {
+      "name": "wave9-quick-wins",
+      "description": "Naming fixes, severity alignments, constant corrections, and string/ordering issues. All are surgical single-line or few-line changes with no cross-cutting dependencies. Clears 10 items fast to reduce noise in future waves.",
+      "items": [
+        "P8: Anthropic tool_choice=none sends unsupported value (§8.7)",
+        "P16: Generic identity in system prompts (§9.2)",
+        "P21: spawn_agent tool named 'delegate', missing params (§9.9)",
+        "P26: start_no_incoming severity WARNING vs ERROR (§11.2)",
+        "P27: exit_no_outgoing severity WARNING vs ERROR (§11.2)",
+        "F: Start node shape ellipse vs Mdiamond (§11.2)",
+        "P14: apply_patch format unclear (§9.2)",
+        "P17: Truncation marker missing guidance text (§9.5)",
+        "P18: Default truncation char limits wrong for 5 tools (§9.5)",
+        "P20: User instruction override not appended last (§9.8)"
+      ],
+      "estimated_effort": "small",
+      "priority": 1,
+      "rationale": "All are constant/config/naming fixes. Zero architectural risk. Highest ROI per engineering hour."
+    },
+    {
+      "name": "wave10-streaming-generation",
+      "description": "Core streaming and generation API alignment: StreamResult return type, granular stream events, structured output, TimeoutConfig, and abort/cancellation plumbing through generate()/stream(). This is the foundational wave -- abort mechanism here unblocks graceful shutdown in wave13.",
+      "items": [
+        "P4: stream() returns AsyncIterator[str] not StreamResult (§8.4)",
+        "P5: Missing TEXT_START/TEXT_END/REASONING_START/REASONING_END events (§8.4)",
+        "P6: generate_object() no native structured output (§8.4)",
+        "P7: Single flat HTTP timeout, no TimeoutConfig (§8.4)",
+        "F: Abort/cancellation on generate()/stream() (§8.4)",
+        "P12: Abort cooperative-only, no LLM stream cancel/process kill (§9.1)"
+      ],
+      "estimated_effort": "large",
+      "priority": 2,
+      "rationale": "All §8.4 items plus the abort mechanism that spans LLM SDK and agent layer. P12 depends on the abort primitive from F-abort. Must land before wave13 (graceful shutdown).",
+      "dependencies": [],
+      "blocks": ["wave13-events-lifecycle"]
+    },
+    {
+      "name": "wave11-provider-catalog",
+      "description": "Provider catalog enrichment and content handling: default_provider on Client, catalog API extensions (get_latest_model, cost fields, aliases), multimodal content degradation handling, and Gemini provider-specific tools.",
+      "items": [
+        "P1: No default_provider on Client (§8.1)",
+        "P2: Catalog missing get_latest_model, cost fields, aliases (§8.1)",
+        "P3: Audio/document content parts silently degrade in adapters (§8.3)",
+        "P15: Gemini profile missing provider-specific tools (§9.2)"
+      ],
+      "estimated_effort": "medium",
+      "priority": 3,
+      "rationale": "All provider/catalog items grouped together. P1+P2 are §8.1 catalog, P3 is adapter content handling, P15 is Gemini profile. No hard dependencies on other waves.",
+      "dependencies": []
+    },
+    {
+      "name": "wave12-tool-agent-session",
+      "description": "Tool execution validation, agent session constructor, loop detection behavior, StepResult enrichment, and mid-session reasoning_effort API. Touches the agent loop internals.",
+      "items": [
+        "P9: No schema validation of tool args in generate.py (§8.7)",
+        "P10: StepResult has minimal fields (§8.7)",
+        "P11: Session constructor doesn't accept ProviderProfile/ExecutionEnvironment (§9.1)",
+        "P13: Loop detection exits instead of warning+continue (§9.1)",
+        "P19: No public API for reasoning_effort mid-session (§9.7)"
+      ],
+      "estimated_effort": "medium",
+      "priority": 4,
+      "rationale": "All agent loop / tool execution items. P9+P10 are §8.7 tool handling, P11+P13 are §9.1 session/loop, P19 is mid-session control. Can run in parallel with wave11."
+    },
+    {
+      "name": "wave13-events-lifecycle",
+      "description": "Event type alignment, session lifecycle transitions, and graceful shutdown completion. Depends on abort mechanism from wave10.",
+      "items": [
+        "P22: Missing event types + 4 event names diverge (§9.10)",
+        "F: Auth errors don't transition to CLOSED (§9.11)",
+        "P23: Graceful shutdown 4/8 steps (§9.11)"
+      ],
+      "estimated_effort": "medium",
+      "priority": 5,
+      "rationale": "P23 graceful shutdown depends on abort/cancellation from wave10. P22 event alignment and F-auth-errors are session lifecycle fixes that should land together for a coherent state machine.",
+      "dependencies": ["wave10-streaming-generation"]
+    },
+    {
+      "name": "wave14-pipeline-graph-validation",
+      "description": "Pipeline graph model enrichment and validation rule alignment: typed label field, multi-class stylesheet matching, reachability rule completion, handler-shape mapping, and handler signature correction.",
+      "items": [
+        "P24: No typed label field on Graph (§11.1)",
+        "P25: Multi-class stylesheet matching missing (§11.1)",
+        "P28: Reachability rule incomplete (§11.2)",
+        "P29: Handler-shape mapping (§11.3)",
+        "P30: Handler signature 5 params vs 4 (§11.3)"
+      ],
+      "estimated_effort": "medium",
+      "priority": 6,
+      "rationale": "All §11.1-11.3 pipeline graph items. P24+P25 are graph model, P28 is validation, P29+P30 are handler contract. Grouped because handler signature change (P30) may affect handler-shape mapping (P29)."
+    },
+    {
+      "name": "wave15-pipeline-execution-types",
+      "description": "Pipeline execution layer: named retry presets, jitter confirmability, typed Context class, and Interviewer Question/Answer models. Completes the attractor-spec pipeline compliance.",
+      "items": [
+        "P31: Single hardcoded RetryPolicy, no named presets (§11.5)",
+        "P32: Jitter not confirmable at pipeline layer (§11.5)",
+        "P33: Context is plain dict not Context class (§11.7)",
+        "P34: Interviewer flat str API vs Question/Answer models (§11.8)"
+      ],
+      "estimated_effort": "medium",
+      "priority": 7,
+      "rationale": "All §11.5-11.8 pipeline execution items. P31+P32 are retry policy, P33 is context typing, P34 is interviewer API. Can run after wave14 since handler signature changes may affect Context usage."
+    },
+    {
+      "name": "wave16-test-coverage",
+      "description": "Comprehensive test suite gaps: multi-turn caching validation, cross-provider parity matrix (45 cells), integration smoke test script, and 18 missing live test scenarios (image input, Gemini tools, streaming+tools, reasoning tokens, rate limits). Should run LAST so tests validate all prior wave implementations.",
+      "items": [
+        "F: Multi-turn caching validation test (§8.6)",
+        "F: Cross-provider parity matrix tests x45 cells (§8.9)",
+        "F: Integration smoke test script (§8.10)",
+        "F: 18 missing live test scenarios: image input (6), Gemini tool tests (3), streaming+tools (3), reasoning tokens (3), rate limit tests (3)"
+      ],
+      "estimated_effort": "large",
+      "priority": 8,
+      "rationale": "All test-only FAIL items. Deliberately last because: (1) tests should validate implementations from waves 9-15, (2) parity matrix tests need provider/streaming changes from waves 10-11, (3) live test scenarios need abort/structured-output from wave10. May be split into sub-waves if too large for one PR.",
+      "dependencies": ["wave10-streaming-generation", "wave11-provider-catalog"],
+      "notes": "Consider splitting: wave16a for unit/mock tests (caching, parity matrix, smoke) and wave16b for live API tests (18 scenarios) which require API keys and are slower to iterate."
+    }
+  ],
+  "execution_plan": {
+    "parallel_tracks": [
+      {
+        "track": "A - Core (serial)",
+        "sequence": ["wave9-quick-wins", "wave10-streaming-generation", "wave13-events-lifecycle"]
+      },
+      {
+        "track": "B - Provider+Agent (parallel with A after wave9)",
+        "sequence": ["wave11-provider-catalog", "wave12-tool-agent-session"]
+      },
+      {
+        "track": "C - Pipeline (parallel with B)",
+        "sequence": ["wave14-pipeline-graph-validation", "wave15-pipeline-execution-types"]
+      },
+      {
+        "track": "D - Tests (after A+B complete)",
+        "sequence": ["wave16-test-coverage"]
+      }
+    ],
+    "critical_path": "wave9 -> wave10 -> wave13 -> wave16",
+    "estimated_total_prs": 8,
+    "estimated_calendar_time": "Wave9 (1 day) + Wave10 (3 days) + Waves 11-15 (2 days each, some parallel) + Wave16 (3 days) = ~2-3 weeks with parallelism"
+  },
+  "recipe_invocations": [
+    {
+      "wave": "wave9-quick-wins",
+      "command": "amplifier tool invoke recipes operation=execute recipe_path=recipes/wave-implementation.yaml context='{\"wave_name\":\"wave9-quick-wins\",\"wave_items_description\":\"P8: Anthropic tool_choice=none sends unsupported value (§8.7) -- adapter sends tool_choice=none which Anthropic does not support, should omit or map to auto. P16: Generic identity in system prompts (§9.2) -- system prompt uses generic identity instead of spec-defined agent identity. P21: spawn_agent tool named delegate, missing params (§9.9) -- tool registration uses name delegate instead of spawn_agent, missing required parameters per spec. P26: start_no_incoming severity WARNING vs ERROR (§11.2) -- validation emits WARNING but spec requires ERROR. P27: exit_no_outgoing severity WARNING vs ERROR (§11.2) -- same as P26 for exit nodes. F: Start node shape ellipse vs Mdiamond (§11.2) -- start node uses ellipse shape but spec requires Mdiamond. P14: apply_patch format unclear (§9.2) -- apply_patch tool format documentation does not match spec. P17: Truncation marker missing guidance text (§9.5) -- truncation markers lack the spec-required guidance text for the model. P18: Default truncation char limits wrong for 5 tools (§9.5) -- char limits for read_file, grep, glob, bash, web_fetch do not match spec defaults. P20: User instruction override not appended last (§9.8) -- user instruction override is not positioned as last message per spec ordering.\"}'"
+    },
+    {
+      "wave": "wave10-streaming-generation",
+      "command": "amplifier tool invoke recipes operation=execute recipe_path=recipes/wave-implementation.yaml context='{\"wave_name\":\"wave10-streaming-generation\",\"wave_items_description\":\"P4: stream() returns AsyncIterator[str] not StreamResult (§8.4) -- stream() should return StreamResult wrapping the iterator with metadata. P5: Missing TEXT_START/TEXT_END/REASONING_START/REASONING_END events (§8.4) -- streaming events enum lacks these four granular event types. P6: generate_object() no native structured output (§8.4) -- generate_object uses prompt-based JSON extraction, should use provider native structured output (response_format/tool-based). P7: Single flat HTTP timeout, no TimeoutConfig (§8.4) -- single timeout value instead of TimeoutConfig with connect/read/total fields. F: Abort/cancellation on generate()/stream() (§8.4) -- no abort signal plumbed through generate()/stream() for cooperative cancellation. P12: Abort cooperative-only, no LLM stream cancel/process kill (§9.1) -- abort only sets a flag, does not cancel in-flight HTTP streams or kill subprocesses.\"}'"
+    }
+  ]
+}
