@@ -11,7 +11,7 @@
 #   Stage 2 "review-and-converge"  - Convergence loop: review -> fix -> re-review
 #                                    (max 3 iterations, no approval)
 #   Stage 3 "ship"                 - Commit, push, create PR via foundation:git-ops
-#                                    (approval gate after PR created)
+#                                    (approval gate after stage completes)
 #   Stage 4 "merge"               - Squash-merge after human approval
 #
 # The review-and-converge stage uses a while loop with while_steps to run
@@ -37,43 +37,55 @@
 # CHANGELOG
 # =============================================================================
 #
-# v1.2.0 (2026-02-16):
-#   - FIX: Move approval gate from stage "merge" to stage "ship"
-#     * ROOT CAUSE: Approval gates fire AFTER a stage's steps complete, not
-#       before. The v1.1.0 fix placed the gate on "merge", which meant it fired
-#       before merge's steps but also before the user could review the PR --
-#       the correct location is on "ship" so it fires after push_output and
-#       pr_output are available, pausing before merge runs.
-#     * FIX: Moved approval block from stage 4 "merge" to stage 3 "ship"
-#   - FIX: Add set -euo pipefail to generate-diff and re-generate-diff bash steps
-#     * These multi-command bash steps lacked fail-fast shell options
+# v1.0.1 (2026-02-17):
+#   - IMPROVEMENT: Added provider_preferences to apply-review-fixes
+#     (anthropic/claude-opus-4 primary, openai/o3 fallback)
+#   - IMPROVEMENT: create-branch uses git checkout -B to handle existing
+#     branches instead of failing
+#   - IMPROVEMENT: create-branch checks git status --porcelain for dirty
+#     working directory before branching
+#   - IMPROVEMENT: merge-pr has on_error: continue for graceful failure
+#   - IMPROVEMENT: Added set -euo pipefail to run-mock-tests and
+#     run-live-tests bash steps
+#   - IMPROVEMENT: fix_results fed into review-correctness and
+#     review-simplification prompts so reviewers see prior iteration fixes
+#   - IMPROVEMENT: Added retry (max_attempts: 2, exponential backoff) to
+#     all agent steps
+#   - IMPROVEMENT: Added branch_prefix context variable (default "feat")
+#   - IMPROVEMENT: Added test_command_mock and test_command_live context
+#     variables to avoid repeating test commands across steps
+#   - CLEANUP: Removed dead /tmp/wave-diff.patch file writes from
+#     generate-diff and re-generate-diff steps (stdout capture is sufficient)
+#   - CLEANUP: Removed unused output variables (validation_output,
+#     branch_output)
+#   - FIX: Added comment explaining why dummy echo exists in
+#     review-converge-loop (while_condition requires a step body)
+#   - FIX: Corrected stale changelog entries -- approval gates fire AFTER
+#     a stage's steps complete, not before
 #
-# v1.1.0 (2026-02-16):
-#   - CRITICAL FIX: Moved approval gate from stage "ship" to stage "merge"
-#     * ROOT CAUSE: Approval gates fire before a stage's steps run, so having
-#       the gate on "ship" meant the prompt referenced {{push_output}} and
-#       {{pr_output}} which didn't exist yet
-#     * FIX: Gate now on "merge" - ship creates PR, user reviews, then merge runs
-#   - IMPROVEMENT: Changed commit-and-push and create-pr from bash steps to
-#     foundation:git-ops agent steps for better commit messages and safety checks
-#   - IMPROVEMENT: Added provider fallback chains to all provider_preferences
-#   - IMPROVEMENT: Added retry with exponential backoff to network operations
-#     (commit-and-push, create-pr)
-#   - IMPROVEMENT: Added spec file validation step at start of first stage
+# v1.2.0 (2026-02-16): [SUPERSEDED by v1.0.1 -- version scheme reset]
+#   - Moved approval gate from stage "merge" to stage "ship"
+#     NOTE: The v1.1.0 changelog incorrectly stated gates fire "before a
+#     stage's steps run." Gates actually fire AFTER a stage completes.
+#   - Added set -euo pipefail to generate-diff and re-generate-diff
 #
-# v1.0.0 (2026-02-16):
+# v1.1.0 (2026-02-16): [SUPERSEDED by v1.0.1 -- version scheme reset]
+#   - Moved approval gate from stage "ship" to stage "merge"
+#     NOTE: This changelog incorrectly stated "gates fire before a stage's
+#     steps run." Gates actually fire AFTER a stage completes. The move
+#     was therefore wrong and was corrected in v1.2.0.
+#   - Changed commit-and-push and create-pr to foundation:git-ops agent steps
+#   - Added provider fallback chains and retry to network operations
+#   - Added spec file validation step
+#
+# v1.0.0 (2026-02-16): [SUPERSEDED by v1.0.1 -- version scheme reset]
 #   - Initial recipe implementation
-#     * 4-stage workflow: implement -> review-converge -> ship -> merge
-#     * While-loop convergence with max 3 review iterations
-#     * Provider diversity: Opus for implementation, Sonnet for correctness
-#       review, o3 for simplification review
-#     * Approval gate between PR creation and merge
 #
 # =============================================================================
 
 name: "wave-implementation"
 description: "Implement a wave of spec compliance fixes: branch, implement, test, review with convergence loop, and ship as PR"
-version: "1.2.0"
+version: "1.0.1"
 tags: ["attractor", "spec-compliance", "implementation", "wave"]
 
 context:
@@ -81,7 +93,11 @@ context:
   wave_items_description: ""   # Required: items to fix with spec section references
   spec_files_dir: "/tmp"       # Where spec files live (fetched by Recipe 1)
   base_branch: "main"          # Branch to create feature branch from
+  branch_prefix: "feat"        # Branch name prefix (branch = prefix/wave_name)
+  test_command_mock: "uv run python -m pytest tests/ --ignore=tests/test_e2e_integration.py --ignore=tests/test_live_comprehensive.py -x -q"
+  test_command_live: "uv run python -m pytest tests/test_e2e_integration.py tests/test_live_comprehensive.py -v -x"
   converged: "false"           # Loop control variable (set by review synthesis)
+  fix_results: ""              # Accumulated fix results from review iterations
 
 stages:
   # ===========================================================================
@@ -108,7 +124,6 @@ stages:
             exit 1
           fi
           echo "All spec files present in {{spec_files_dir}}"
-        output: "validation_output"
         timeout: 30
 
       # -----------------------------------------------------------------------
@@ -118,13 +133,21 @@ stages:
         type: "bash"
         command: |
           set -euo pipefail
+
+          # Fail early if working directory is dirty
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "ERROR: Working directory has uncommitted changes:" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
           git checkout {{base_branch}}
           git pull origin {{base_branch}}
-          git checkout -b feat/{{wave_name}}
-          echo "Created branch feat/{{wave_name}} from {{base_branch}}"
+          # -B creates or resets the branch (handles existing branch gracefully)
+          git checkout -B {{branch_prefix}}/{{wave_name}}
+          echo "Created branch {{branch_prefix}}/{{wave_name}} from {{base_branch}}"
         env:
           GIT_EDITOR: "true"
-        output: "branch_output"
         timeout: 60
 
       # -----------------------------------------------------------------------
@@ -159,6 +182,10 @@ stages:
             **Acceptance criteria**: <what the implementation must do>
         output: "spec_requirements"
         timeout: 600
+        retry:
+          max_attempts: 2
+          backoff: "exponential"
+          initial_delay: 10
 
       # -----------------------------------------------------------------------
       # Step 3: Implement all fixes (heavy step -- Opus 4)
@@ -188,9 +215,7 @@ stages:
           3. Write or update tests to verify each fix. Each spec requirement
              should have at least one test covering it.
           4. After implementing, run the mock test suite to verify:
-               uv run python -m pytest tests/ \
-                 --ignore=tests/test_e2e_integration.py \
-                 --ignore=tests/test_live_comprehensive.py -x -q
+               {{test_command_mock}}
           5. Fix any test failures before finishing.
 
           CONSTRAINTS:
@@ -205,6 +230,10 @@ stages:
           - Test run results
         output: "implementation_summary"
         timeout: 1800
+        retry:
+          max_attempts: 2
+          backoff: "exponential"
+          initial_delay: 10
 
       # -----------------------------------------------------------------------
       # Step 4: Run mock/unit tests
@@ -212,10 +241,8 @@ stages:
       - id: "run-mock-tests"
         type: "bash"
         command: |
-          uv run python -m pytest tests/ \
-            --ignore=tests/test_e2e_integration.py \
-            --ignore=tests/test_live_comprehensive.py \
-            -x -q 2>&1
+          set -euo pipefail
+          {{test_command_mock}} 2>&1
         output: "mock_test_results"
         timeout: 300
 
@@ -225,10 +252,8 @@ stages:
       - id: "run-live-tests"
         type: "bash"
         command: |
-          uv run python -m pytest \
-            tests/test_e2e_integration.py \
-            tests/test_live_comprehensive.py \
-            -v -x 2>&1
+          set -euo pipefail
+          {{test_command_live}} 2>&1
         output: "live_test_results"
         timeout: 600
         on_error: "continue"
@@ -240,7 +265,6 @@ stages:
         type: "bash"
         command: |
           set -euo pipefail
-          git diff HEAD > /tmp/wave-diff.patch
           echo "=== Diff Stats ==="
           git diff --stat HEAD
           echo ""
@@ -256,15 +280,18 @@ stages:
   #   1. Correctness review  (Sonnet 4.5)
   #   2. Simplification review (o3)
   #   3. Synthesize into APPROVE / REQUEST_CHANGES verdict
-  #   4. If REQUEST_CHANGES: apply must-fix items
+  #   4. If REQUEST_CHANGES: apply must-fix items (Opus 4)
   #   5. If REQUEST_CHANGES: regenerate diff
   # Loop exits when synthesis returns converged=true or 3 iterations done.
   # ===========================================================================
   - name: "review-and-converge"
     steps:
+      # The while_condition requires a step body, but the actual loop work
+      # is in while_steps below. This echo is a no-op placeholder required
+      # by the recipe schema -- the real iteration logic follows.
       - id: "review-converge-loop"
         type: "bash"
-        command: "echo 'Review convergence loop'"
+        command: "echo 'Starting review convergence iteration'"
         while_condition: "{{converged}} != 'true'"
         max_while_iterations: 3
         while_steps:
@@ -298,6 +325,9 @@ stages:
               Mock: {{mock_test_results}}
               Live: {{live_test_results}}
 
+              PREVIOUS ITERATION FIX RESULTS (empty on first pass):
+              {{fix_results}}
+
               For each claimed fix, verify:
               1. Does the code change actually close the spec gap?
               2. Is the implementation correct per the spec's exact wording?
@@ -312,6 +342,10 @@ stages:
               Be strict about spec compliance. Cite spec text when flagging gaps.
             output: "correctness_review"
             timeout: 600
+            retry:
+              max_attempts: 2
+              backoff: "exponential"
+              initial_delay: 10
 
           # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
           # Review B: Simplification / DRY  (o3)
@@ -332,6 +366,9 @@ stages:
               CURRENT DIFF:
               {{diff_output}}
 
+              PREVIOUS ITERATION FIX RESULTS (empty on first pass):
+              {{fix_results}}
+
               Look for:
               1. Unnecessary complexity beyond what the spec requires
               2. Boilerplate that could be reduced
@@ -348,6 +385,10 @@ stages:
               Do NOT flag things that are just style preferences.
             output: "simplification_review"
             timeout: 600
+            retry:
+              max_attempts: 2
+              backoff: "exponential"
+              initial_delay: 10
 
           # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
           # Synthesize: Merge reviews into single verdict
@@ -400,13 +441,22 @@ stages:
             output: "review_synthesis"
             parse_json: true
             timeout: 300
+            retry:
+              max_attempts: 2
+              backoff: "exponential"
+              initial_delay: 10
 
           # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-          # Conditional: Apply must-fix items
+          # Conditional: Apply must-fix items (Opus 4)
           # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
           - id: "apply-review-fixes"
             condition: "{{review_synthesis.verdict}} == 'REQUEST_CHANGES'"
             agent: "foundation:modular-builder"
+            provider_preferences:
+              - provider: anthropic
+                model: claude-opus-4-*
+              - provider: openai
+                model: o3
             prompt: |
               The review found must-fix items. Apply them now.
 
@@ -419,19 +469,24 @@ stages:
               SIMPLIFICATION REVIEW (full details):
               {{simplification_review}}
 
+              PREVIOUS FIX RESULTS (for context on what was already changed):
+              {{fix_results}}
+
               Instructions:
               1. Address EACH must-fix item listed above
               2. Make minimal, targeted changes -- fix only what's flagged
               3. After making changes, run the test suite:
-                   uv run python -m pytest tests/ \
-                     --ignore=tests/test_e2e_integration.py \
-                     --ignore=tests/test_live_comprehensive.py -x -q
+                   {{test_command_mock}}
               4. Fix any test failures caused by your changes
               5. Do NOT introduce new features or refactor unrelated code
 
               Report what you changed and the test results.
             output: "fix_results"
             timeout: 900
+            retry:
+              max_attempts: 2
+              backoff: "exponential"
+              initial_delay: 10
 
           # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
           # Conditional: Regenerate diff after fixes
@@ -441,7 +496,6 @@ stages:
             type: "bash"
             command: |
               set -euo pipefail
-              git diff HEAD > /tmp/wave-diff.patch
               echo "=== Diff Stats ==="
               git diff --stat HEAD
               echo ""
@@ -455,7 +509,7 @@ stages:
         break_when: "{{converged}} == 'true'"
 
   # ===========================================================================
-  # Stage 3: Ship  (approval gate fires after this stage's steps)
+  # Stage 3: Ship  (approval gate fires AFTER this stage's steps complete)
   # ===========================================================================
   - name: "ship"
     steps:
@@ -465,9 +519,9 @@ stages:
       - id: "commit-and-push"
         agent: "foundation:git-ops"
         prompt: |
-          Stage and commit all changes on the current branch feat/{{wave_name}}
-          with a descriptive commit message summarizing the spec compliance
-          fixes for {{wave_name}}.
+          Stage and commit all changes on the current branch
+          {{branch_prefix}}/{{wave_name}} with a descriptive commit message
+          summarizing the spec compliance fixes for {{wave_name}}.
 
           Then push the branch to origin.
 
@@ -489,10 +543,10 @@ stages:
       - id: "create-pr"
         agent: "foundation:git-ops"
         prompt: |
-          Create a pull request for branch feat/{{wave_name}} targeting
-          {{base_branch}}.
+          Create a pull request for branch {{branch_prefix}}/{{wave_name}}
+          targeting {{base_branch}}.
 
-          Title: feat: {{wave_name}}
+          Title: {{branch_prefix}}: {{wave_name}}
           Body should include:
           - Summary of spec compliance fixes for {{wave_name}}
           - Implementation summary: {{implementation_summary}}
@@ -529,7 +583,7 @@ stages:
         type: "bash"
         command: |
           set -euo pipefail
-          git checkout feat/{{wave_name}}
+          git checkout {{branch_prefix}}/{{wave_name}}
           gh pr merge --squash
           git checkout {{base_branch}}
           git pull origin {{base_branch}}
@@ -538,13 +592,12 @@ stages:
           GIT_EDITOR: "true"
         output: "merge_output"
         timeout: 120
+        on_error: "continue"
 
 # =============================================================================
 # Output Summary:
 #
 # After full execution, you will have:
-#   - validation_output     : Confirmation that spec files exist
-#   - branch_output         : Feature branch creation confirmation
 #   - spec_requirements     : Verbatim spec text for each wave item
 #   - implementation_summary : What was changed and why
 #   - mock_test_results     : Unit/mock test output
@@ -553,11 +606,9 @@ stages:
 #   - correctness_review    : Last correctness review
 #   - simplification_review : Last simplification review
 #   - review_synthesis      : Final review verdict (JSON)
+#   - fix_results           : Last iteration's fix details (if any)
 #   - push_output           : Git push confirmation
 #   - pr_output             : PR creation URL
 #   - merge_output          : Merge confirmation
-#
-# Artifacts on disk:
-#   - /tmp/wave-diff.patch   : Last generated diff patch file
 #
 # =============================================================================
