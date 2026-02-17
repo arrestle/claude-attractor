@@ -603,7 +603,9 @@ stages:
         command: |
           set -euo pipefail
           mkdir -p docs/plans
-          printf '%s\n' '{{wave_plan}}' > docs/plans/wave-plan.json.tmp
+          cat > docs/plans/wave-plan.json.tmp <<'WAVE_PLAN_EOF'
+          {{wave_plan}}
+          WAVE_PLAN_EOF
           mv docs/plans/wave-plan.json.tmp docs/plans/wave-plan.json
 
           if [ -s docs/plans/wave-plan.json ]; then
