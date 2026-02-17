@@ -74,9 +74,9 @@ stages:
 
           base="{{spec_repo_base}}"
 
-          curl -fsSL "${base}/docs/specs/unified-llm-spec.md"       -o /tmp/unified-llm-spec.md
-          curl -fsSL "${base}/docs/specs/coding-agent-loop-spec.md"  -o /tmp/coding-agent-loop-spec.md
-          curl -fsSL "${base}/docs/specs/attractor-spec.md"          -o /tmp/attractor-spec.md
+          curl -fsSL "${base}/unified-llm-spec.md"       -o /tmp/unified-llm-spec.md
+          curl -fsSL "${base}/coding-agent-loop-spec.md"  -o /tmp/coding-agent-loop-spec.md
+          curl -fsSL "${base}/attractor-spec.md"          -o /tmp/attractor-spec.md
 
           echo "Fetched specs:"
           wc -l /tmp/unified-llm-spec.md /tmp/coding-agent-loop-spec.md /tmp/attractor-spec.md
