@@ -17,6 +17,7 @@ from typing import Any
 
 from attractor_agent.abort import AbortSignal
 from attractor_agent.events import EventEmitter, EventKind, SessionEvent
+from attractor_agent.tools.core import set_max_command_timeout
 from attractor_agent.tools.registry import ToolRegistry
 from attractor_llm.catalog import get_model_info
 from attractor_llm.client import Client
@@ -76,6 +77,9 @@ class SessionConfig:
     # Per-tool truncation overrides (Spec §2.2, §5.2, §5.3)
     tool_output_limits: dict[str, int] | None = None
     tool_line_limits: dict[str, int] | None = None
+
+    # Shell command timeout ceiling (Spec §2.2)
+    max_command_timeout_ms: int = 600_000  # 10 minutes
 
     # Execution environment: "local" (default) or "docker"
     environment: str = "local"
@@ -154,6 +158,9 @@ class Session:
         )
         if tools:
             self._tool_registry.register_many(list(tools))
+
+        # Wire config timeout ceiling to the shell tool's clamping logic
+        set_max_command_timeout(self._config.max_command_timeout_ms)
 
         # Steering queue: messages injected between tool rounds
         self._steer_queue: list[str] = []
