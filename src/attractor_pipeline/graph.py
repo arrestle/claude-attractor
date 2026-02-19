@@ -18,7 +18,7 @@ class NodeShape(StrEnum):
     """Known node shapes that map to handler types. Spec §2.4."""
 
     BOX = "box"  # codergen (LLM task)
-    HEXAGON = "hexagon"  # codergen (LLM task, alternative)
+    HEXAGON = "hexagon"  # manager (sub-pipeline orchestrator)
     DIAMOND = "diamond"  # conditional (branching)
     COMPONENT = "component"  # parallel (fan-out)
     TRIPLEOCTAGON = "tripleoctagon"  # fan-in (join)
@@ -123,6 +123,15 @@ class Graph:
 
     # All raw graph attributes
     attrs: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def label(self) -> str:
+        """Human-readable label for this graph. Spec §11.1.
+
+        The label is stored as a raw graph attribute in DOT (``graph [label="..."]``),
+        not as a typed field, so it is accessed via attrs with a safe default.
+        """
+        return self.attrs.get("label", "")
 
     def get_node(self, node_id: str) -> Node | None:
         """Look up a node by ID."""
