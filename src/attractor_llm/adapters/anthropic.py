@@ -276,10 +276,18 @@ class AnthropicAdapter:
                             "data": base64.b64encode(part.document.data).decode(),
                         },
                     }
+                if part.document.url:
+                    # §8.3.3: Anthropic supports document URLs natively.
+                    # URLPDFSource only accepts "type" and "url" -- no media_type.
+                    return {
+                        "type": "document",
+                        "source": {
+                            "type": "url",
+                            "url": part.document.url,
+                        },
+                    }
                 raise InvalidRequestError(
-                    "Anthropic requires document data as base64;"
-                    " URL-only documents are not supported",
-                    provider="anthropic",
+                    "DOCUMENT content part has no data or URL", provider="anthropic"
                 )
 
             case ContentPartKind.AUDIO:

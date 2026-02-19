@@ -481,7 +481,9 @@ async def generate_object(
     """Generate structured JSON output.
 
     Instructs the model to respond with JSON matching the given schema.
-    Parses and returns the JSON object.
+    For OpenAI and Gemini, uses native response_format for structured output
+    (§8.4.7).  For Anthropic and unknown providers, falls back to prompt
+    injection.
 
     Args:
         client: The LLM client.
@@ -498,22 +500,42 @@ async def generate_object(
     Raises:
         NoObjectGeneratedError: If the response is not valid JSON.
     """
+    # §8.4.7: Use native response_format for providers that support it.
+    # Anthropic has no native structured-output mode; unknown providers also
+    # fall back to prompt injection.
+    response_format: dict[str, Any] | None = None
     schema_instruction = ""
-    if schema:
-        schema_instruction = (
-            f"\n\nRespond with a JSON object matching this schema:\n"
-            f"```json\n{json.dumps(schema, indent=2)}\n```\n"
-            f"Output ONLY the JSON object, no other text."
-        )
 
-    full_system = (system or "") + schema_instruction
+    if schema:
+        if provider == "openai":
+            # OpenAI Responses API: json_schema with nested json_schema object
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "schema": schema, "strict": True},
+            }
+        elif provider == "gemini":
+            # Gemini: responseMimeType + responseSchema via generationConfig
+            response_format = {
+                "type": "json_schema",
+                "schema": schema,
+            }
+        else:
+            # Anthropic and unknown providers: prompt injection fallback
+            schema_instruction = (
+                f"\n\nRespond with a JSON object matching this schema:\n"
+                f"```json\n{json.dumps(schema, indent=2)}\n```\n"
+                f"Output ONLY the JSON object, no other text."
+            )
+
+    full_system = ((system or "") + schema_instruction).strip() or None
 
     request = Request(
         model=model,
         provider=provider,
         messages=[Message.user(prompt)],
-        system=full_system.strip() or None,
+        system=full_system,
         temperature=temperature,
+        response_format=response_format,
     )
 
     response = await client.complete(request)
@@ -549,14 +571,21 @@ def _find_tool(tools: list[Tool], name: str) -> Tool | None:
     return None
 
 
+_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
+    "string": str,
+    "integer": int,
+    "number": (int, float),
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
 def _validate_tool_args(tool: Tool, args: dict[str, Any]) -> str | None:
     """Validate tool call arguments against the tool's parameter schema. Spec §8.7.
 
     Checks that all fields listed in ``parameters.required`` are present in
-    ``args``.  Deep JSON Schema validation (type checking, enum constraints,
-    etc.) is intentionally out of scope; this is a lightweight pre-flight
-    guard so callers get a clear error instead of a confusing KeyError inside
-    the execute handler.
+    ``args``, and performs basic type checking for top-level declared properties.
 
     Args:
         tool: The Tool whose ``parameters`` schema to validate against.
@@ -569,15 +598,35 @@ def _validate_tool_args(tool: Tool, args: dict[str, Any]) -> str | None:
     if not schema:
         return None  # no schema, nothing to validate
 
+    # Check required fields
     required: list[str] = schema.get("required", [])
     if not isinstance(required, list):
         return None  # malformed schema, skip validation
-    if not required:
-        return None  # no required fields declared
 
     missing = [field for field in required if field not in args]
     if missing:
         fields = ", ".join(repr(f) for f in missing)
         return f"ToolArgError: missing required argument(s) {fields} for tool '{tool.name}'"
+
+    # Check types for declared properties
+    properties: dict[str, Any] = schema.get("properties", {})
+    for key, value in args.items():
+        if key not in properties:
+            continue  # extra keys are tolerated
+        expected_type_name = properties[key].get("type")
+        if not expected_type_name or expected_type_name not in _TYPE_MAP:
+            continue  # unknown/missing type -- skip
+        expected = _TYPE_MAP[expected_type_name]
+        # bool is a subclass of int in Python -- reject bools for integer/number
+        if expected_type_name in ("integer", "number") and isinstance(value, bool):
+            return (
+                f"ToolArgError: argument '{key}' expected {expected_type_name}, got boolean"
+                f" for tool '{tool.name}'"
+            )
+        if not isinstance(value, expected):
+            return (
+                f"ToolArgError: argument '{key}' expected {expected_type_name},"
+                f" got {type(value).__name__} for tool '{tool.name}'"
+            )
 
     return None
