@@ -467,6 +467,9 @@ class OpenAIAdapter:
         current_fc_name: str | None = None
         has_seen_tool_call: bool = False
 
+        # §3.14: track whether we are inside an open text block
+        _in_text_block: bool = False
+
         async for line in http_response.aiter_lines():
             line = line.strip()
 
@@ -495,6 +498,23 @@ class OpenAIAdapter:
                     current_fc_name,
                     has_seen_tool_call,
                 ):
+                    # §3.14: emit TEXT_START before the first TEXT_DELTA
+                    if ev.kind == StreamEventKind.TEXT_DELTA and not _in_text_block:
+                        yield StreamEvent(kind=StreamEventKind.TEXT_START)
+                        _in_text_block = True
+                    # §3.14: emit TEXT_END before FINISH, ERROR, or TOOL_CALL_START
+                    # if we are still inside an open text block
+                    if (
+                        ev.kind
+                        in (
+                            StreamEventKind.FINISH,
+                            StreamEventKind.ERROR,
+                            StreamEventKind.TOOL_CALL_START,
+                        )
+                        and _in_text_block
+                    ):
+                        yield StreamEvent(kind=StreamEventKind.TEXT_END)
+                        _in_text_block = False
                     yield ev
 
                 # Track function call state

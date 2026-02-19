@@ -31,9 +31,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator
+from typing import Any
 
 from attractor_llm.client import Client
+from attractor_llm.streaming import StreamAccumulator, StreamResult
 from attractor_llm.types import (
     ContentPart,
     FinishReason,
@@ -42,12 +44,10 @@ from attractor_llm.types import (
     Request,
     Response,
     StepResult,
+    StreamEvent,
     Tool,
     Usage,
 )
-
-if TYPE_CHECKING:
-    from attractor_llm.streaming import StreamResult
 
 
 async def generate(
@@ -293,6 +293,179 @@ async def stream(
 
     event_stream = await client.stream(request, abort_signal=abort_signal)
     return StreamResult(event_stream)
+
+
+async def stream_with_tools(
+    client: Client,
+    model: str,
+    prompt: str | None = None,
+    *,
+    system: str | None = None,
+    messages: list[Message] | None = None,
+    tools: list[Tool] | None = None,
+    tool_choice: str | None = None,
+    max_rounds: int = 10,
+    temperature: float | None = None,
+    reasoning_effort: str | None = None,
+    provider: str | None = None,
+    abort_signal: Any | None = None,
+) -> StreamResult:
+    """Stream text generation with an automatic tool execution loop. Spec §8.9.22-24.
+
+    Like ``stream()``, but supports agentic tool use:
+
+    1. Streams from the provider, accumulating events via StreamAccumulator.
+    2. When the accumulated response has tool calls (finish_reason == TOOL_CALLS),
+       executes them and appends tool results to the conversation.
+    3. Starts a new stream with the updated history.
+    4. Repeats until the model produces a non-tool-call response or
+       ``max_rounds`` is exhausted.
+
+    All StreamEvents from every round are yielded in order, so callers see a
+    single contiguous event stream covering all turns.
+
+    Args:
+        client: The LLM client with registered adapters.
+        model: Model ID.
+        prompt: User prompt string (mutually exclusive with messages).
+        system: Optional system prompt.
+        messages: Conversation history (mutually exclusive with prompt).
+        tools: Tools the model may call.
+        tool_choice: Optional tool-choice override.
+        max_rounds: Maximum tool-execution rounds (0 = no tool execution).
+        temperature: Optional temperature override.
+        reasoning_effort: Optional reasoning effort.
+        provider: Optional provider override.
+        abort_signal: Optional abort signal for cancellation.
+
+    Returns:
+        StreamResult wrapping a multi-turn streaming loop.
+    """
+    # Validate input
+    if prompt is not None and messages is not None:
+        from attractor_llm.errors import InvalidRequestError
+
+        raise InvalidRequestError("Cannot provide both 'prompt' and 'messages'")
+    if prompt is None and messages is None:
+        from attractor_llm.errors import InvalidRequestError
+
+        raise InvalidRequestError("Must provide either 'prompt' or 'messages'")
+
+    history: list[Message] = (
+        list(messages) if messages is not None else [Message.user(prompt)]  # type: ignore[arg-type]
+    )
+
+    async def _loop() -> AsyncIterator[StreamEvent]:
+        # Iterate up to max_rounds+1 total LLM calls (mirrors generate() semantics)
+        for _round in range(max_rounds + 1):
+            request = Request(
+                model=model,
+                provider=provider,
+                messages=history,
+                system=system,
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
+            )
+
+            event_stream = await client.stream(request, abort_signal=abort_signal)
+            acc = StreamAccumulator()
+
+            async for event in event_stream:
+                acc.feed(event)
+                yield event
+
+            response = acc.response()
+            history.append(response.message)
+
+            # Check abort signal after each LLM call
+            if abort_signal is not None and abort_signal.is_set:
+                from attractor_llm.errors import AbortError
+
+                raise AbortError("Generation aborted by signal")
+
+            # If no tool calls, or no tools provided, we are done
+            if response.finish_reason != FinishReason.TOOL_CALLS or not tools:
+                return
+
+            # max_rounds=0 means no automatic tool execution (mirrors generate())
+            if max_rounds == 0:
+                return
+
+            # §5.5: passive tools (no execute handler) — return control to caller
+            has_passive = any(
+                (t := _find_tool(tools, tc.name or "")) is not None and not t.execute
+                for tc in response.tool_calls
+            )
+            if has_passive:
+                return  # caller handles tool calls
+
+            # Execute tool calls in parallel (§5.7) -- mirrors generate()
+            async def _exec_one(tc: ContentPart) -> tuple[ContentPart, str, bool]:
+                """Execute a single tool call, return (tool_call, output, is_error)."""
+                tool_obj = _find_tool(tools, tc.name or "")
+                if tool_obj and tool_obj.execute:
+                    try:
+                        args = tc.arguments
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except json.JSONDecodeError as exc:
+                                return tc, f"ToolArgError: failed to parse JSON: {exc}", True
+                        if not isinstance(args, dict):
+                            kind = type(args).__name__
+                            return (
+                                tc,
+                                f"ToolArgError: arguments must be a JSON object, got {kind}",
+                                True,
+                            )
+                        validation_error = _validate_tool_args(tool_obj, args)
+                        if validation_error:
+                            return tc, validation_error, True
+                        raw = await tool_obj.execute(**args)
+                        output = str(raw) if not isinstance(raw, str) else raw
+                        return tc, output, False
+                    except Exception as exc:  # noqa: BLE001
+                        return tc, f"{type(exc).__name__}: {exc}", True
+                else:
+                    return tc, f"Unknown tool: {tc.name}", True
+
+            if len(response.tool_calls) == 1:
+                exec_results: list[tuple[ContentPart, str, bool]] = [
+                    await _exec_one(response.tool_calls[0])
+                ]
+            else:
+                gathered = await asyncio.gather(
+                    *(_exec_one(tc) for tc in response.tool_calls),
+                    return_exceptions=True,
+                )
+                exec_results = []
+                for i, r in enumerate(gathered):
+                    if isinstance(r, (KeyboardInterrupt, SystemExit)):
+                        raise r
+                    if isinstance(r, asyncio.CancelledError):
+                        raise r
+                    if isinstance(r, BaseException):
+                        tc = response.tool_calls[i]
+                        exec_results.append((tc, f"{type(r).__name__}: {r}", True))
+                    else:
+                        exec_results.append(r)
+
+            # Append tool results to history for next round
+            for tc, output, is_error in exec_results:
+                history.append(
+                    Message.tool_result(
+                        tc.tool_call_id or "",
+                        tc.name or "",
+                        output,
+                        is_error=is_error,
+                    )
+                )
+
+        # max_rounds exhausted without a terminal response -- stop cleanly
+
+    return StreamResult(_loop())
 
 
 async def generate_object(
