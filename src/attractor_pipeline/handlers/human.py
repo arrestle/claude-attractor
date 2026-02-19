@@ -14,6 +14,7 @@ Implementations:
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -42,6 +43,46 @@ class QuestionType(StrEnum):
 
 
 # ------------------------------------------------------------------ #
+# Structured Question / Answer models (Spec §6.1-6.3, §11.8)
+# ------------------------------------------------------------------ #
+
+
+@dataclass
+class Question:
+    """Structured question for human-in-the-loop interactions. Spec §6.1.
+
+    Carries type hints, option lists, default answers, timeout, stage
+    label, and arbitrary metadata so Interviewer implementations can
+    render appropriate UI controls.
+
+    Backward compat: the flat ``ask()`` API on ``Interviewer`` is
+    unchanged; ``ask_question()`` converts to/from Question/Answer.
+    """
+
+    text: str
+    question_type: QuestionType = QuestionType.FREE_TEXT
+    options: list[str] | None = None
+    default: str | None = None
+    timeout_seconds: float | None = None
+    stage: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Answer:
+    """Structured answer from human-in-the-loop interactions. Spec §6.2-6.3.
+
+    Contains the raw response value, the matched option (for choice
+    questions), and the display text (may differ from *value* when an
+    interviewer normalises the selection).
+    """
+
+    value: str
+    selected_option: str | None = None
+    text: str = ""
+
+
+# ------------------------------------------------------------------ #
 # Interviewer protocol
 # ------------------------------------------------------------------ #
 
@@ -51,6 +92,11 @@ class Interviewer(Protocol):
 
     Implementations handle how questions are presented to and
     answered by humans: console prompts, web UI, Slack, etc.
+
+    Only ``ask()`` is required by the protocol.  Concrete classes
+    typically also expose ``ask_question()`` (bridged via the module-level
+    ``ask_question_via_ask()`` helper) but external implementors that only
+    provide ``ask()`` remain fully compatible.
     """
 
     async def ask(
@@ -60,7 +106,7 @@ class Interviewer(Protocol):
         node_id: str = "",
         question_type: QuestionType | None = None,
     ) -> str:
-        """Ask the human a question and return their response.
+        """Ask the human a question and return their response (flat API).
 
         Args:
             question: The question text to present.
@@ -74,6 +120,35 @@ class Interviewer(Protocol):
             The human's response string.
         """
         ...
+
+
+# ------------------------------------------------------------------ #
+# Module-level bridge helper (Spec §6.1-6.3)
+# ------------------------------------------------------------------ #
+
+
+async def ask_question_via_ask(interviewer: Interviewer, question: Question) -> Answer:
+    """Bridge from Question/Answer to the flat ask() API.
+
+    Concrete Interviewer implementations delegate their ``ask_question()``
+    body here to avoid repeating the same conversion logic in every class.
+    External implementors that only implement ``ask()`` can call this
+    helper directly without needing to subclass anything.
+
+    Args:
+        interviewer: Any object satisfying the ``Interviewer`` protocol.
+        question: Structured ``Question`` descriptor.
+
+    Returns:
+        Structured ``Answer`` with value, selected_option, and text.
+    """
+    value = await interviewer.ask(
+        question=question.text,
+        options=question.options,
+        question_type=question.question_type,
+    )
+    selected = value if (question.options and value in question.options) else None
+    return Answer(value=value, selected_option=selected, text=value)
 
 
 # ------------------------------------------------------------------ #
@@ -95,6 +170,9 @@ class AutoApproveInterviewer:
             return options[0]
         return "approved"
 
+    async def ask_question(self, question: Question) -> Answer:
+        return await ask_question_via_ask(self, question)
+
 
 class ConsoleInterviewer:
     """Prompts on stdin for human input. For CLI use."""
@@ -115,6 +193,9 @@ class ConsoleInterviewer:
 
         # Run input() in a thread to avoid blocking the event loop
         return await asyncio.to_thread(input, prompt)
+
+    async def ask_question(self, question: Question) -> Answer:
+        return await ask_question_via_ask(self, question)
 
 
 class CallbackInterviewer:
@@ -142,6 +223,9 @@ class CallbackInterviewer:
     ) -> str:
         return await self._callback(question, options, node_id or None)
 
+    async def ask_question(self, question: Question) -> Answer:
+        return await ask_question_via_ask(self, question)
+
 
 class QueueInterviewer:
     """Reads from a pre-filled answer queue. Spec §6, §6.4, §11.8.
@@ -167,6 +251,9 @@ class QueueInterviewer:
         answer = self._answers[self._index]
         self._index += 1
         return answer
+
+    async def ask_question(self, question: Question) -> Answer:
+        return await ask_question_via_ask(self, question)
 
 
 class HumanHandler:
