@@ -210,7 +210,7 @@ stages:
         mode: "REVIEW"
         provider_preferences:
           - provider: anthropic
-            model: claude-sonnet-4-5-*
+            model: claude-sonnet-4-6
           - provider: openai
             model: o3
         prompt: |
@@ -269,7 +269,7 @@ stages:
           - provider: openai
             model: o3
           - provider: anthropic
-            model: claude-sonnet-4-5-*
+            model: claude-sonnet-4-6
         prompt: |
           You are a spec-compliance auditor. Check EVERY item in the following
           DoD checklist. Do not skip any.
@@ -326,7 +326,7 @@ stages:
           - provider: google
             model: gemini-2.5-pro
           - provider: anthropic
-            model: claude-sonnet-4-5-*
+            model: claude-sonnet-4-6
         prompt: |
           You are a spec-compliance auditor. Check EVERY item in the following
           DoD checklist. Do not skip any.
@@ -384,7 +384,7 @@ stages:
           - provider: google
             model: gemini-2.5-pro
           - provider: anthropic
-            model: claude-sonnet-4-5-*
+            model: claude-sonnet-4-6
         depends_on:
           - "audit-unified-llm"
           - "audit-coding-agent"
@@ -571,7 +571,7 @@ stages:
         mode: "ARCHITECT"
         provider_preferences:
           - provider: anthropic
-            model: claude-sonnet-4-5-*
+            model: claude-sonnet-4-6
           - provider: openai
             model: o3
         prompt: |
