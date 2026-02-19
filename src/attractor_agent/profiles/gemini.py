@@ -39,7 +39,13 @@ class GeminiProfile:
         return True
 
     def get_tools(self, base_tools: list[Tool]) -> list[Tool]:
-        """Enhance tool descriptions with examples for Gemini."""
+        """Enhance tool descriptions with examples for Gemini.
+
+        Also injects list_dir and read_many_files if not already present
+        (Spec §3.6: Gemini profile tool list).
+        """
+        from attractor_agent.tools.core import LIST_DIR, READ_MANY_FILES
+
         tools: list[Tool] = []
         for tool in base_tools:
             desc = _GEMINI_TOOL_DESCRIPTIONS.get(tool.name, tool.description)
@@ -51,6 +57,25 @@ class GeminiProfile:
                     execute=tool.execute,
                 )
             )
+        if base_tools:
+            if not any(t.name == "list_dir" for t in tools):
+                tools.append(
+                    Tool(
+                        name=LIST_DIR.name,
+                        description=_GEMINI_TOOL_DESCRIPTIONS["list_dir"],
+                        parameters=LIST_DIR.parameters,
+                        execute=LIST_DIR.execute,
+                    )
+                )
+            if not any(t.name == "read_many_files" for t in tools):
+                tools.append(
+                    Tool(
+                        name=READ_MANY_FILES.name,
+                        description=_GEMINI_TOOL_DESCRIPTIONS["read_many_files"],
+                        parameters=READ_MANY_FILES.parameters,
+                        execute=READ_MANY_FILES.execute,
+                    )
+                )
         return tools
 
     def apply_to_config(self, config: SessionConfig) -> SessionConfig:
@@ -173,5 +198,18 @@ _GEMINI_TOOL_DESCRIPTIONS: dict[str, str] = {
         "Common patterns: '**/*.py' (all Python files), "
         "'src/**/*.ts' (TypeScript in src). "
         "Use to understand project structure before diving in."
+    ),
+    "list_dir": (
+        "List the contents of a directory. Returns files and subdirectories "
+        "with optional depth control. Use depth=0 for immediate children only, "
+        "depth=1 (default) for one level of subdirectories. Directories are "
+        "marked with trailing /. Use this to understand project structure "
+        "before reading specific files."
+    ),
+    "read_many_files": (
+        "Read multiple files in a single call. More efficient than multiple "
+        "read_file calls when you need to examine several files at once. "
+        "Returns concatenated content with file headers and line numbers. "
+        "Missing files are reported per-file without aborting the batch."
     ),
 }

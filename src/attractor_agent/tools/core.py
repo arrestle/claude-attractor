@@ -675,6 +675,150 @@ GLOB = _make_tool(
 
 
 # ------------------------------------------------------------------ #
+# list_dir
+# ------------------------------------------------------------------ #
+
+
+async def _list_dir(path: str = ".", depth: int = 1) -> str:
+    """List directory contents with optional depth control.
+
+    Depth semantics:
+        0 = immediate children only (no recursion into subdirectories)
+        1 = one level of subdirectories expanded (default)
+        N = N levels deep (capped at 5)
+    """
+    depth = min(depth, 5)  # Cap to prevent enormous output
+    dir_path = Path(path).expanduser().resolve()
+
+    # Security: path confinement (skip for non-local -- container IS sandbox)
+    if isinstance(_environment, LocalEnvironment):
+        error = _check_path_allowed(dir_path)
+        if error:
+            return error
+        if not dir_path.exists():
+            return f"Error: Path not found: {path}"
+        if not dir_path.is_dir():
+            return f"Error: Not a directory: {path}"
+    else:
+        # Non-local: delegate to environment abstraction (flat listing only)
+        entries = await _environment.list_dir(str(dir_path))
+        if not entries:
+            return f"{path}/\n  (empty)"
+        formatted = "\n".join(f"  {e}" for e in entries)
+        return f"{path}/\n{formatted}"
+
+    lines: list[str] = [f"{path}/"]
+
+    def _walk(p: Path, current_depth: int, indent: str) -> None:
+        try:
+            # Directories first, then files, each group sorted by name
+            entries = sorted(p.iterdir(), key=lambda e: (e.is_file(), e.name.lower()))
+        except PermissionError:
+            lines.append(f"{indent}[permission denied]")
+            return
+        for entry in entries:
+            if entry.is_dir():
+                lines.append(f"{indent}{entry.name}/")
+                if current_depth < depth:
+                    _walk(entry, current_depth + 1, indent + "  ")
+            else:
+                lines.append(f"{indent}{entry.name}")
+
+    _walk(dir_path, 0, "  ")
+
+    if len(lines) == 1:
+        lines.append("  (empty)")
+
+    return "\n".join(lines)
+
+
+LIST_DIR = _make_tool(
+    name="list_dir",
+    description="List directory contents with optional depth control.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Directory path to list. Defaults to current directory.",
+            },
+            "depth": {
+                "type": "integer",
+                "description": (
+                    "Recursion depth. 0=immediate children only, "
+                    "1=one level deep (default). Max: 5."
+                ),
+                "default": 1,
+            },
+        },
+    },
+    handler=_list_dir,
+)
+
+
+# ------------------------------------------------------------------ #
+# read_many_files
+# ------------------------------------------------------------------ #
+
+
+async def _read_many_files(paths: list[str]) -> str:
+    """Read multiple files in a single call, returning concatenated content."""
+    if not paths:
+        return "(no files requested)"
+
+    parts: list[str] = []
+    for path in paths:
+        header = f"=== file: {path} ==="
+        file_path = Path(path).expanduser().resolve()
+
+        # Security + existence checks for local environments
+        if isinstance(_environment, LocalEnvironment):
+            error = _check_path_allowed(file_path)
+            if error:
+                parts.append(f"{header}\n{error}\n")
+                continue
+            if not file_path.exists():
+                parts.append(f"{header}\nError: File not found: {path}\n")
+                continue
+            if not file_path.is_file():
+                parts.append(f"{header}\nError: Not a file: {path}\n")
+                continue
+
+        try:
+            text = await _environment.read_file(str(file_path))
+        except (FileNotFoundError, OSError) as e:
+            parts.append(f"{header}\nError: {e}\n")
+            continue
+
+        lines = text.split("\n")
+        numbered = [f"{i:6d}\t{line}" for i, line in enumerate(lines, start=1)]
+        content = "\n".join(numbered)
+        parts.append(f"{header}\n{content}\n")
+
+    return "\n".join(parts)
+
+
+READ_MANY_FILES = _make_tool(
+    name="read_many_files",
+    description=(
+        "Read multiple files in a single call. Returns concatenated content with file headers."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of file paths to read.",
+            }
+        },
+        "required": ["paths"],
+    },
+    handler=_read_many_files,
+)
+
+
+# ------------------------------------------------------------------ #
 # apply_patch (unified diff format)
 # ------------------------------------------------------------------ #
 
