@@ -378,10 +378,15 @@ class TestProfileEdgeCases:
         )
         p = AnthropicProfile()
         tools = p.get_tools([custom_tool])
-        assert len(tools) == 1
-        assert tools[0].name == "custom_tool"
-        # Description unchanged (not in override dict)
-        assert tools[0].description == "A custom tool"
+        tool_names = {t.name for t in tools}
+        # custom_tool is present and unmodified
+        assert "custom_tool" in tool_names, f"custom_tool missing from {tool_names}"
+        custom = next(t for t in tools if t.name == "custom_tool")
+        assert custom.description == "A custom tool"
+        # Subagent tools are injected at Session level (not by the profile)
+        assert "spawn_agent" not in tool_names, (
+            "Profile must NOT inject spawn_agent -- that is Session's responsibility"
+        )
 
     def test_multiple_apply_to_config_is_idempotent(self):
         """Applying the same profile twice doesn't change values."""

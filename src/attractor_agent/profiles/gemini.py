@@ -43,6 +43,8 @@ class GeminiProfile:
 
         Also injects list_dir and read_many_files if not already present
         (Spec §3.6: Gemini profile tool list).
+        Subagent tools (spawn_agent, send_input, wait, close_agent) are
+        injected at Session level with a real client (§9.12.34-36).
         """
         from attractor_agent.tools.core import LIST_DIR, READ_MANY_FILES
 

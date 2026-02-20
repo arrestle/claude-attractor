@@ -39,7 +39,11 @@ class AnthropicProfile:
         return True
 
     def get_tools(self, base_tools: list[Tool]) -> list[Tool]:
-        """Enhance tool descriptions for Claude's conventions."""
+        """Enhance tool descriptions for Claude's conventions.
+
+        Subagent tools (spawn_agent, send_input, wait, close_agent) are
+        injected at Session level with a real client (§9.12.34-36).
+        """
         tools: list[Tool] = []
         for tool in base_tools:
             desc = _ANTHROPIC_TOOL_DESCRIPTIONS.get(tool.name, tool.description)
