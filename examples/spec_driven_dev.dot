@@ -46,10 +46,6 @@ digraph spec_driven_dev {
 
     check_validation [shape=diamond label="Specs Valid?"]
 
-    validation_failed [shape=Msquare label="Specs Need Work"
-        prompt="Validation found blocking errors. Fix the spec files and re-run."
-    ]
-
     // ── Phase 3: Plan Architecture ─────────────────────────────
 
     plan [shape=box class="architect" label="Plan Architecture"
@@ -92,7 +88,7 @@ digraph spec_driven_dev {
 
     start -> catalog -> validate -> check_validation
 
-    check_validation -> validation_failed [condition="codergen.validate.verdict = fail"]
+    check_validation -> done             [condition="codergen.validate.verdict = fail"]
     check_validation -> plan               [condition="codergen.validate.verdict != fail"]
 
     plan -> implement -> verify_impl -> gen_tests -> run_tests -> done

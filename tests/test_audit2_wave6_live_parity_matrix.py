@@ -421,13 +421,14 @@ class TestS09StructuredOutput:
         provider: str,
         model: str,
     ) -> None:
-        obj = await generate_object(
+        result = await generate_object(
             provider_client,
             model,
             "Alice is 30 years old.",
             schema=PERSON_SCHEMA,
             provider=provider,
         )
+        obj = result.parsed_object if hasattr(result, "parsed_object") else result
         assert isinstance(obj, dict), f"Expected dict, got {type(obj)}"
         assert "name" in obj and "age" in obj, f"Missing required keys; got {obj}"
         assert "alice" in obj["name"].lower(), f"Expected Alice in name; got {obj['name']}"
