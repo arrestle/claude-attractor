@@ -389,6 +389,32 @@ def _rule_condition_syntax(graph: Graph) -> list[Diagnostic]:
     return results
 
 
+def _rule_manager_has_child_graph(graph: Graph) -> list[Diagnostic]:
+    """R15: Manager nodes (shape=hexagon) must have a child_graph attribute.
+
+    Hexagon maps to ManagerHandler which requires child_graph to know
+    which sub-pipeline to orchestrate.  Without it the handler fails
+    silently on every retry attempt (GitHub issue #36).
+    """
+    results: list[Diagnostic] = []
+    for node in graph.nodes.values():
+        if node.shape == "hexagon" and not node.attrs.get("child_graph"):
+            results.append(
+                Diagnostic(
+                    rule="R15",
+                    severity=Severity.ERROR,
+                    message=(
+                        f"Manager node '{node.id}' (shape=hexagon) has no "
+                        f"'child_graph' attribute. The manager handler requires "
+                        f"child_graph to specify which sub-pipeline to run. "
+                        f"Did you mean shape=house for a human review gate?"
+                    ),
+                    node_id=node.id,
+                )
+            )
+    return results
+
+
 # ------------------------------------------------------------------ #
 # Rule registry
 # ------------------------------------------------------------------ #
@@ -408,4 +434,5 @@ ALL_RULES = [
     _rule_has_goal,
     _rule_prompt_on_llm_nodes,
     _rule_condition_syntax,
+    _rule_manager_has_child_graph,
 ]
