@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from attractor_pipeline.engine.events import (
     CheckpointSaved,
+    EventEmitter,
     InterviewCompleted,
     InterviewStarted,
     InterviewTimeout,
@@ -119,3 +124,83 @@ class TestEventTypes:
         e = PipelineStarted(name="Test", id="abc")
         assert isinstance(e.description, str)
         assert len(e.description) > 0
+
+
+class TestEventEmitter:
+    """EventEmitter supports callback and async stream patterns (Spec 9.6 lines 1639-1649)."""
+
+    def test_emit_without_callback_is_noop(self):
+        """Emitting without a callback does not raise."""
+        emitter = EventEmitter()
+        emitter.emit(PipelineStarted(name="test", id="1"))  # no error
+
+    def test_callback_receives_events(self):
+        """Observer pattern: on_event callback receives emitted events."""
+        received: list = []
+        emitter = EventEmitter(on_event=received.append)
+        event = PipelineStarted(name="test", id="1")
+        emitter.emit(event)
+        assert received == [event]
+
+    def test_callback_receives_multiple_events(self):
+        """Callback receives events in emission order."""
+        received: list = []
+        emitter = EventEmitter(on_event=received.append)
+        e1 = PipelineStarted(name="test", id="1")
+        e2 = StageStarted(name="build", index=0)
+        emitter.emit(e1)
+        emitter.emit(e2)
+        assert received == [e1, e2]
+
+    @pytest.mark.asyncio
+    async def test_async_stream_receives_events(self):
+        """Stream pattern: async for event in emitter.events() yields emitted events."""
+        emitter = EventEmitter()
+        e1 = PipelineStarted(name="test", id="1")
+        e2 = StageStarted(name="build", index=0)
+
+        # Emit events then close the stream
+        emitter.emit(e1)
+        emitter.emit(e2)
+        emitter.close()
+
+        collected: list = []
+        async for event in emitter.events():
+            collected.append(event)
+
+        assert collected == [e1, e2]
+
+    @pytest.mark.asyncio
+    async def test_async_stream_terminates_on_close(self):
+        """Stream terminates cleanly when emitter.close() is called."""
+        emitter = EventEmitter()
+
+        async def collect() -> list:
+            result = []
+            async for event in emitter.events():
+                result.append(event)
+            return result
+
+        task = asyncio.create_task(collect())
+        emitter.emit(PipelineStarted(name="test", id="1"))
+        emitter.close()
+
+        result = await asyncio.wait_for(task, timeout=2.0)
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_both_patterns_simultaneously(self):
+        """Callback and stream both receive the same events."""
+        callback_events: list = []
+        emitter = EventEmitter(on_event=callback_events.append)
+
+        event = PipelineStarted(name="test", id="1")
+        emitter.emit(event)
+        emitter.close()
+
+        stream_events: list = []
+        async for e in emitter.events():
+            stream_events.append(e)
+
+        assert callback_events == [event]
+        assert stream_events == [event]

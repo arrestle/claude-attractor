@@ -7,6 +7,8 @@ in the pipeline lifecycle.  Each concrete type inherits from
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------
@@ -243,3 +245,55 @@ class CheckpointSaved(PipelineEvent):
     @property
     def description(self) -> str:
         return f"Checkpoint saved at node '{self.node_id}'"
+
+
+# ------------------------------------------------------------------ #
+# Event emitter (Spec 9.6 lines 1639-1649)
+# ------------------------------------------------------------------ #
+
+
+_SENTINEL = object()  # Signals end of stream
+
+
+class EventEmitter:
+    """Emits pipeline events via callback and/or async stream.
+
+    Supports both consumption patterns from Spec Section 9.6:
+
+    1. **Observer/callback:** Pass ``on_event`` callable to constructor.
+       Called synchronously on each ``emit()``.
+
+    2. **Async stream:** Iterate ``async for event in emitter.events()``.
+       Uses an asyncio.Queue internally. Call ``close()`` to signal
+       end-of-stream.
+
+    Both patterns can be used simultaneously.
+    """
+
+    def __init__(
+        self,
+        on_event: Callable[[PipelineEvent], None] | None = None,
+    ) -> None:
+        self._on_event = on_event
+        self._queue: asyncio.Queue[PipelineEvent | object] = asyncio.Queue()
+        self._closed = False
+
+    def emit(self, event: PipelineEvent) -> None:
+        """Emit an event to callback and stream consumers."""
+        if self._on_event is not None:
+            self._on_event(event)
+        if not self._closed:
+            self._queue.put_nowait(event)
+
+    def close(self) -> None:
+        """Signal end of event stream."""
+        self._closed = True
+        self._queue.put_nowait(_SENTINEL)
+
+    async def events(self) -> AsyncIterator[PipelineEvent]:
+        """Async iterator over emitted events. Terminates on close()."""
+        while True:
+            item = await self._queue.get()
+            if item is _SENTINEL:
+                break
+            yield item  # type: ignore[misc]
