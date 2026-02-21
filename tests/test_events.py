@@ -400,3 +400,42 @@ class TestRunnerEventEmission:
             f"StageCompleted should not be emitted for a permanently-failed node, "
             f"but got {len(completed_events)}: {completed_events}"
         )
+
+
+# ------------------------------------------------------------------ #
+# HumanHandler interview event tests
+# ------------------------------------------------------------------ #
+
+
+class TestHumanHandlerEvents:
+    """HumanHandler emits InterviewStarted and InterviewCompleted."""
+
+    @pytest.mark.asyncio
+    async def test_human_gate_emits_interview_events(self):
+        """A pipeline with a house node emits interview events."""
+        g = parse_dot("""
+        digraph H {
+            graph [goal="Human test"]
+            start  [shape=Mdiamond]
+            review [shape=house, label="Approve deployment?"]
+            done   [shape=Msquare]
+            start -> review -> done [label="Approve"]
+        }
+        """)
+        registry = HandlerRegistry()
+        register_default_handlers(registry)
+
+        events: list = []
+        result = await run_pipeline(g, registry, on_event=events.append)
+
+        assert result.status == PipelineStatus.COMPLETED
+
+        interview_started = [e for e in events if isinstance(e, InterviewStarted)]
+        interview_completed = [e for e in events if isinstance(e, InterviewCompleted)]
+
+        assert len(interview_started) == 1
+        assert interview_started[0].stage == "review"
+        assert "Approve" in interview_started[0].question
+
+        assert len(interview_completed) == 1
+        assert interview_completed[0].duration >= 0

@@ -13,6 +13,7 @@ Implementations:
 
 from __future__ import annotations
 
+import time as _time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -20,6 +21,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from attractor_agent.abort import AbortSignal
+from attractor_pipeline.engine.events import (
+    EventEmitter,
+    InterviewCompleted,
+    InterviewStarted,
+)
 from attractor_pipeline.engine.runner import HandlerResult, Outcome
 from attractor_pipeline.graph import Graph, Node
 
@@ -316,6 +322,12 @@ class HumanHandler:
         else:
             question_type = QuestionType.FREE_TEXT
 
+        # Emit interview event (Spec 9.6)
+        _emitter: EventEmitter | None = context.get("_event_emitter")
+        if _emitter:
+            _emitter.emit(InterviewStarted(question=question, stage=node.id))
+        interview_start = _time.monotonic()
+
         # Ask the human
         try:
             response = await self._interviewer.ask(
@@ -324,6 +336,14 @@ class HumanHandler:
                 node_id=node.id,
                 question_type=question_type,
             )
+            if _emitter:
+                _emitter.emit(
+                    InterviewCompleted(
+                        question=question,
+                        answer=response,
+                        duration=_time.monotonic() - interview_start,
+                    )
+                )
         except Exception as exc:  # noqa: BLE001
             return HandlerResult(
                 status=Outcome.FAIL,
