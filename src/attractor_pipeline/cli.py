@@ -61,6 +61,32 @@ def main() -> None:
         help="Use DirectLLMBackend (no agent tools)",
     )
     run_parser.add_argument(
+        "--backend",
+        type=str,
+        choices=["agent", "direct", "claude-code"],
+        default=None,
+        help="Backend: agent (default, with tools), direct (no tools), "
+        "claude-code (shell out to claude-code CLI)",
+    )
+    run_parser.add_argument(
+        "--claude-bin",
+        type=str,
+        default=None,
+        help="Path to claude-code binary (auto-detected if omitted)",
+    )
+    run_parser.add_argument(
+        "--working-dir",
+        type=str,
+        default=None,
+        help="Working directory for claude-code (e.g. SOS report folder)",
+    )
+    run_parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=10,
+        help="Max agentic turns per stage for claude-code (default: 10)",
+    )
+    run_parser.add_argument(
         "--logs-dir",
         type=str,
         default=None,
@@ -214,22 +240,25 @@ async def _cmd_run(args: argparse.Namespace) -> None:
             )
             provider = "anthropic"
 
-    # Get API key
-    key_env_map = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "gemini": "GOOGLE_API_KEY",
-    }
-    env_var = key_env_map.get(provider, "ANTHROPIC_API_KEY")
-    api_key = os.environ.get(env_var)
-    if not api_key:
-        print(f"Error: Set {env_var} environment variable")
-        sys.exit(1)
-
-    # Set up LLM client
+    # Get API key (not required for claude-code backend)
+    backend_choice_early = getattr(args, "backend", None)
     client = Client()
-    adapter = _create_adapter(provider, api_key)
-    client.register_adapter(provider, adapter)
+
+    if backend_choice_early != "claude-code":
+        key_env_map = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "gemini": "GOOGLE_API_KEY",
+        }
+        env_var = key_env_map.get(provider, "ANTHROPIC_API_KEY")
+        api_key = os.environ.get(env_var)
+        if not api_key:
+            print(f"Error: Set {env_var} environment variable")
+            sys.exit(1)
+
+        adapter = _create_adapter(provider, api_key)
+        client.register_adapter(provider, adapter)
+
     print(f"Provider: {provider} ({model})")
 
     # Set up execution environment
@@ -252,7 +281,23 @@ async def _cmd_run(args: argparse.Namespace) -> None:
         print("Environment: Local")
 
     # Set up backend
-    if args.no_tools:
+    backend_choice = getattr(args, "backend", None)
+    if backend_choice == "claude-code" or (backend_choice is None and args.no_tools is False and getattr(args, "claude_bin", None)):
+        backend_choice = "claude-code"
+    elif backend_choice is None:
+        backend_choice = "direct" if args.no_tools else "agent"
+
+    if backend_choice == "claude-code":
+        from attractor_pipeline.backends import ClaudeCodeBackend
+
+        backend = ClaudeCodeBackend(
+            claude_bin=getattr(args, "claude_bin", None),
+            working_dir=getattr(args, "working_dir", None),
+            max_turns=getattr(args, "max_turns", 10),
+            model=model,
+        )
+        print("Backend: ClaudeCode (claude-code CLI)")
+    elif backend_choice == "direct":
         backend = DirectLLMBackend(
             client,
             default_model=model,

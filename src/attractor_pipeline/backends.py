@@ -9,11 +9,20 @@ AgentLoopBackend: Wraps a coding agent Session as a CodergenBackend.
 DirectLLMBackend: Calls the LLM Client directly (no agent loop).
     Pipeline node -> LLM Client -> Provider API
     Simpler, no tools, good for simple prompt-response nodes.
+
+ClaudeCodeBackend: Shells out to the claude-code CLI.
+    Pipeline node -> claude-code --print -> Vertex AI / Anthropic API
+    Uses whatever auth claude-code is configured with (Vertex AI, API key, etc.).
 """
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from typing import Any
+
+import anyio
 
 from attractor_agent.abort import AbortSignal
 from attractor_agent.profiles import get_profile
@@ -183,3 +192,163 @@ class DirectLLMBackend:
             )
 
         return text
+
+
+class ClaudeCodeBackend:
+    """Shells out to the claude-code CLI as a CodergenBackend.
+
+    Spawns ``claude-code --print <prompt>`` for each codergen node.
+    Uses whatever authentication claude-code is configured with:
+    - Google Vertex AI (via ~/.claude/settings.json + gcloud auth)
+    - Direct Anthropic API (via ANTHROPIC_API_KEY)
+
+    This avoids re-implementing provider auth and lets users leverage
+    claude-code's built-in file tools, agentic loop, and context window.
+
+    Usage::
+
+        backend = ClaudeCodeBackend(working_dir="/path/to/sos-reports")
+        registry = HandlerRegistry()
+        register_default_handlers(registry, codergen_backend=backend)
+    """
+
+    def __init__(
+        self,
+        *,
+        claude_bin: str | None = None,
+        working_dir: str | None = None,
+        max_turns: int = 10,
+        model: str | None = None,
+    ) -> None:
+        self._claude_bin = claude_bin or self._find_claude_binary()
+        self._working_dir = working_dir
+        self._max_turns = max_turns
+        self._model = model
+
+    @staticmethod
+    def _find_claude_binary() -> str:
+        for name in ("claude-code", "claude"):
+            path = shutil.which(name)
+            if path:
+                return path
+        raise FileNotFoundError(
+            "claude-code CLI not found. Install with: "
+            "npm install -g @anthropic-ai/claude-code"
+        )
+
+    async def run(
+        self,
+        node: Node,
+        prompt: str,
+        context: dict[str, Any],
+        abort_signal: AbortSignal | None = None,
+    ) -> str | HandlerResult:
+        """Execute an LLM call by spawning claude-code --print."""
+        enriched = self._build_prompt(node, prompt, context)
+        timeout = self._parse_timeout(node.timeout) or 900.0
+
+        cmd = [self._claude_bin, "--print"]
+        if self._max_turns:
+            cmd.extend(["--max-turns", str(self._max_turns)])
+        model = node.llm_model or self._model
+        if model:
+            cmd.extend(["--model", model])
+        cmd.append(enriched)
+
+        def _run_subprocess() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=self._working_dir,
+            )
+
+        try:
+            result = await anyio.to_thread.run_sync(_run_subprocess)
+        except subprocess.TimeoutExpired:
+            return HandlerResult(
+                status=Outcome.RETRY,
+                failure_reason=f"claude-code timed out after {timeout}s",
+            )
+
+        if abort_signal and abort_signal.is_set:
+            return HandlerResult(
+                status=Outcome.FAIL,
+                failure_reason="Aborted",
+            )
+
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if "Credit balance is too low" in stderr:
+                return HandlerResult(
+                    status=Outcome.FAIL,
+                    failure_reason="LLM credit balance too low",
+                )
+            if "Could not load the default credentials" in stderr:
+                return HandlerResult(
+                    status=Outcome.FAIL,
+                    failure_reason=(
+                        "Google Cloud credentials not configured. "
+                        "Run: gcloud auth application-default login"
+                    ),
+                )
+            return HandlerResult(
+                status=Outcome.RETRY,
+                failure_reason=f"claude-code exited {result.returncode}: {stderr[:500]}",
+            )
+
+        output = result.stdout.strip()
+        if not output:
+            return HandlerResult(
+                status=Outcome.FAIL,
+                failure_reason="Empty response from claude-code",
+            )
+
+        return output
+
+    def _build_prompt(self, node: Node, prompt: str, context: dict[str, Any]) -> str:
+        parts: list[str] = []
+
+        goal = context.get("goal", "")
+        if goal:
+            parts.append(f"## Pipeline Goal\n{goal}")
+
+        relevant = {
+            k: v for k, v in context.items()
+            if not k.startswith(("_", "human."))
+            and k not in ("goal", "outcome", "preferred_label")
+        }
+        if relevant:
+            parts.append(
+                "## Context from Previous Stages\n"
+                + json.dumps(relevant, indent=2, default=str)
+            )
+
+        parts.append(f"## Task: {node.label or node.id}\n{prompt}")
+
+        parts.append(
+            "## Instructions\n"
+            "Respond with your full analysis or output. "
+            "Do not ask clarifying questions — work with what you have."
+        )
+
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _parse_timeout(timeout_str: str) -> float | None:
+        if not timeout_str:
+            return None
+        s = timeout_str.strip()
+        if s.endswith("ms"):
+            return float(s[:-2]) / 1000
+        if s.endswith("s"):
+            return float(s[:-1])
+        if s.endswith("m"):
+            return float(s[:-1]) * 60
+        if s.endswith("h"):
+            return float(s[:-1]) * 3600
+        try:
+            return float(s)
+        except ValueError:
+            return None
