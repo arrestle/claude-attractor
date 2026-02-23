@@ -176,6 +176,13 @@ class TestMaxTurnsDefaults:
 class TestShellProcessCallback:
     """Task 2 — §9.1.6, §9.11.5: shell processes registered for abort cleanup."""
 
+    @pytest.fixture(autouse=True)
+    def reset_process_callback(self):
+        """Reset the module-level process callback after each test to avoid global state leakage."""
+        from attractor_agent.tools.core import set_process_callback
+        yield
+        set_process_callback(None)
+
     @pytest.mark.asyncio
     async def test_session_wires_process_callback_on_init(self):
         """After Session.__init__, the module-level process callback must point

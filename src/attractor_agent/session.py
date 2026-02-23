@@ -315,17 +315,12 @@ class Session:
         """Access the tool registry to add/remove tools."""
         return self._tool_registry
 
-    def register_process(self, proc: asyncio.subprocess.Process) -> None:
+    def register_process(self, proc: Any) -> None:
         """Register an OS subprocess for cleanup on abort. Spec §9.1.6.
 
-        The process will be sent SIGTERM (then SIGKILL after 2 s) when the
-        session is aborted.  Tools that spawn subprocesses can call this to
-        ensure cleanup without requiring direct access to the shutdown sequence.
-
-        Usage::
-
-            proc = await asyncio.create_subprocess_shell(...)
-            session.register_process(proc)
+        Accepts both asyncio.subprocess.Process (for async subprocesses) and
+        subprocess.Popen (for sync subprocesses run via LocalEnvironment thread workers).
+        GIL-atomic append in CPython; needs threading.Lock under no-GIL mode.
         """
         self._tracked_processes.append(proc)
 
@@ -826,6 +821,10 @@ class Session:
         # --- Step 3: Wait up to 2 seconds for processes to exit. ---
         if _alive:
             _done, _pending = await asyncio.wait(
+                # FIXME(Task 2): proc.wait() is a coroutine for asyncio.subprocess.Process but
+                # returns int for subprocess.Popen (wired by Task 2 via LocalEnvironment).
+                # asyncio.create_task() will raise TypeError on real abort with shell processes.
+                # Fix: branch on type or use asyncio.to_thread(proc.wait) for Popen objects.
                 [asyncio.create_task(proc.wait()) for proc in _alive],
                 timeout=2.0,
             )
