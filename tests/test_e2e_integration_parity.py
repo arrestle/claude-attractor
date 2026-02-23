@@ -751,3 +751,48 @@ class TestSteeringGemini:
         await _run_steering_test(workspace, gemini_client, GEMINI_MODEL, "gemini")
 
 
+# ================================================================== #
+# Task 22: Reasoning effort change — §9.12.31-33
+# ================================================================== #
+
+
+async def _run_reasoning_effort_test(client: Any, model: str, provider: str) -> None:
+    config = SessionConfig(model=model, provider=provider, max_turns=3, reasoning_effort=None)
+    profile = _get_profile_and_tools(provider)[0]
+    config = profile.apply_to_config(config)
+    async with client:
+        session = Session(client=client, config=config)
+        await session.submit("What is 2+2?")
+        session._config.reasoning_effort = "low"
+        result = await session.submit("What is 3+3?")
+    assert result is not None, "Session must return result after reasoning_effort change"
+    assert len(result) > 0, f"Result must be non-empty. Got: {result!r}"
+
+
+class TestReasoningEffortAnthropic:
+    """§9.12.31: Anthropic reasoning effort change mid-session."""
+
+    @skip_no_anthropic
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_change(self, anthropic_client):
+        await _run_reasoning_effort_test(anthropic_client, ANTHROPIC_MODEL, "anthropic")
+
+
+class TestReasoningEffortOpenAI:
+    """§9.12.32: OpenAI reasoning effort change mid-session."""
+
+    @skip_no_openai
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_change(self, openai_client):
+        await _run_reasoning_effort_test(openai_client, OPENAI_MODEL, "openai")
+
+
+class TestReasoningEffortGemini:
+    """§9.12.33: Gemini reasoning effort change mid-session."""
+
+    @skip_no_gemini
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_change(self, gemini_client):
+        await _run_reasoning_effort_test(gemini_client, GEMINI_MODEL, "gemini")
+
+
