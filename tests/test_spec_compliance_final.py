@@ -815,3 +815,31 @@ class TestApplyPatchV4a:
 
         content = target.read_text()
         assert "x = 99" in content
+
+    @pytest.mark.asyncio
+    async def test_v4a_move_to(self, tmp_path):
+        """*** Move to: renames file during Update File operation."""
+        from attractor_agent.tools.core import _apply_patch, set_allowed_roots
+
+        set_allowed_roots([str(tmp_path)])
+
+        source = tmp_path / "old.py"
+        source.write_text("VERSION = 1\nNAME = 'old'\n")
+
+        patch = (
+            "*** Begin Patch\n"
+            f"*** Update File: {tmp_path}/old.py\n"
+            f"*** Move to: {tmp_path}/new.py\n"
+            "@@ VERSION\n"
+            "-VERSION = 1\n"
+            "+VERSION = 2\n"
+            "*** End Patch\n"
+        )
+        await _apply_patch(patch)
+
+        assert not source.exists(), "original file must be removed after Move to"
+        dest = tmp_path / "new.py"
+        assert dest.exists(), "destination file must exist after Move to"
+        content = dest.read_text()
+        assert "VERSION = 2" in content, "updated content must be in destination file"
+        assert "NAME = 'old'" in content, "unchanged lines must be preserved"
