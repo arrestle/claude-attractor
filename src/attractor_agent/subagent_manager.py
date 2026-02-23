@@ -249,7 +249,7 @@ def create_interactive_tools(manager: SubagentManager, client: Any = None) -> li
         model: str = "",
         provider: str = "",
         system_prompt: str = "",
-        max_turns: int = 20,
+        max_turns: int = 0,
     ) -> str:
         if client is None:
             return (

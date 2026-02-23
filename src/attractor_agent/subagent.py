@@ -188,7 +188,7 @@ def _add_spawn_tool(
         model: str | None = None,
         provider: str | None = None,
         working_dir: str | None = None,
-        max_turns: int = 20,
+        max_turns: int = 0,
     ) -> str:
         try:
             result = await spawn_subagent(
