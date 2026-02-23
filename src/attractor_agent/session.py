@@ -74,8 +74,8 @@ class SessionConfig:
     model: str = "claude-sonnet-4-5"
     provider: str | None = None
     system_prompt: str = ""
-    max_turns: int = 50
-    max_tool_rounds_per_turn: int = 25
+    max_turns: int = 0  # 0 = unlimited (spec §9 SessionConfig)
+    max_tool_rounds_per_turn: int = 0  # 0 = unlimited (spec §9 SessionConfig)
     temperature: float | None = None
     reasoning_effort: str | None = None
     provider_options: dict[str, Any] | None = None
@@ -497,7 +497,7 @@ class Session:
                 return "[Session aborted]"
 
             # Check turn limit
-            if self._turn_count > self._config.max_turns:
+            if self._config.max_turns > 0 and self._turn_count > self._config.max_turns:
                 await self._emitter.emit(
                     SessionEvent(
                         kind=EventKind.TURN_LIMIT,
@@ -507,7 +507,10 @@ class Session:
                 return "[Turn limit reached]"
 
             # Check tool round limit
-            if tool_round >= self._config.max_tool_rounds_per_turn:
+            if (
+                self._config.max_tool_rounds_per_turn > 0
+                and tool_round >= self._config.max_tool_rounds_per_turn
+            ):
                 await self._emitter.emit(
                     SessionEvent(
                         kind=EventKind.TURN_LIMIT,
