@@ -352,3 +352,45 @@ class TestSessionEndEvent:
         assert EventKind.SESSION_END not in received, (
             f"SESSION_END must NOT fire after a normal IDLE turn. Got: {received}"
         )
+
+    @pytest.mark.asyncio
+    async def test_session_end_emitted_on_abort(self):
+        """SESSION_END must be emitted when session is aborted mid-run."""
+        from unittest.mock import MagicMock
+
+        from attractor_agent.events import EventKind, SessionEvent
+        from attractor_agent.session import Session, SessionConfig
+        from attractor_llm.types import Message, Response, Usage
+
+        mock_client = MagicMock()
+
+        # The complete() call will trigger abort on the session, then return normally.
+        # abort_signal kwarg must be accepted because _call_llm passes it.
+        async def complete_and_abort(request, abort_signal=None):
+            session._abort.set()
+            resp = Response(
+                id="r1",
+                model="m",
+                content=[],
+                stop_reason="end_turn",
+                usage=Usage(input_tokens=5, output_tokens=5),
+                provider="test",
+            )
+            resp.message = Message.assistant("Aborted.")
+            return resp
+
+        mock_client.complete = complete_and_abort
+
+        received: list[EventKind] = []
+        session = Session(client=mock_client, config=SessionConfig())
+
+        async def capture(e: SessionEvent) -> None:
+            received.append(e.kind)
+
+        session._emitter.on(capture)
+        await session.submit("Hello")
+
+        assert EventKind.SESSION_END in received, (
+            "SESSION_END must be emitted when session is aborted (CLOSED transition). "
+            f"Got events: {received}"
+        )
