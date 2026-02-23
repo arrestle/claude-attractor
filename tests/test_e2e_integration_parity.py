@@ -927,3 +927,65 @@ class TestErrorRecoveryGemini:
         await _run_error_recovery_test(gemini_client, GEMINI_MODEL, "gemini")
 
 
+# ================================================================== #
+# Task 25: Provider-specific tool format validation — §9.12.43-45
+# ================================================================== #
+
+
+async def _run_format_validation_test(
+    workspace: Path, client: Any, model: str, provider: str
+) -> None:
+    from attractor_agent.events import EventKind, SessionEvent
+
+    profile, tools = _get_profile_and_tools(provider)
+    config = SessionConfig(model=model, provider=provider, max_turns=5)
+    config = profile.apply_to_config(config)
+    captured_tool_names: list[str] = []
+
+    async with client:
+        session = Session(client=client, config=config, tools=tools)
+
+        async def capture(e: SessionEvent) -> None:
+            if e.kind == EventKind.TOOL_CALL and e.data:
+                captured_tool_names.append(e.data.get("tool", ""))
+
+        session._emitter.on(capture)
+        await session.submit(
+            f"Write a file called 'validate.txt' in {workspace} containing the word 'validated'."
+        )
+
+    assert any(name in ("write_file", "edit_file") for name in captured_tool_names), (
+        f"Provider {provider} must accept and call write_file or edit_file. "
+        f"Captured tools: {captured_tool_names}"
+    )
+    assert (workspace / "validate.txt").exists(), "write_file must have created validate.txt"
+
+
+class TestToolFormatAnthropic:
+    """§9.12.43: Anthropic provider-specific tool format validation."""
+
+    @skip_no_anthropic
+    @pytest.mark.asyncio
+    async def test_tool_schema_accepted(self, workspace, anthropic_client):
+        """Anthropic receives canned edit_file description override."""
+        await _run_format_validation_test(workspace, anthropic_client, ANTHROPIC_MODEL, "anthropic")
+
+
+class TestToolFormatOpenAI:
+    """§9.12.44: OpenAI provider-specific tool format validation."""
+
+    @skip_no_openai
+    @pytest.mark.asyncio
+    async def test_tool_schema_accepted(self, workspace, openai_client):
+        """OpenAI receives function-calling JSON schema for write_file."""
+        await _run_format_validation_test(workspace, openai_client, OPENAI_MODEL, "openai")
+
+
+class TestToolFormatGemini:
+    """§9.12.45: Gemini provider-specific tool format validation."""
+
+    @skip_no_gemini
+    @pytest.mark.asyncio
+    async def test_tool_schema_accepted(self, workspace, gemini_client):
+        """Gemini receives FunctionDeclaration format for write_file."""
+        await _run_format_validation_test(workspace, gemini_client, GEMINI_MODEL, "gemini")
