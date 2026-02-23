@@ -625,22 +625,20 @@ class TestHttpServer:
 
 
 class TestInterviewerAnswer:
-    """Task 7 — §11.8.1: Interviewer.ask() contract and Answer bridge.
-
-    NOTE: The Interviewer protocol intentionally returns str (minimum contract).
-    Concrete implementations expose ask_question() -> Answer via ask_question_via_ask().
-    This is documented in human.py:117-123.
-    """
+    """Task 7 — §11.8.1: Interviewer.ask() must accept Question and return Answer."""
 
     @pytest.mark.asyncio
-    async def test_queue_interviewer_ask_returns_str(self):
-        """QueueInterviewer.ask() must return str (minimum protocol contract)."""
-        from attractor_pipeline.handlers.human import QueueInterviewer
+    async def test_queue_interviewer_ask_returns_answer(self):
+        """QueueInterviewer.ask() must return Answer per spec §6.1."""
+        from attractor_pipeline.handlers.human import Answer, Question, QueueInterviewer
 
         interviewer = QueueInterviewer(["yes"])
-        result = await interviewer.ask("Are you sure?")
-        assert isinstance(result, str), f"ask() must return str, got {type(result)}"
-        assert result == "yes"
+        question = Question(text="Are you sure?")
+        result = await interviewer.ask(question)
+        assert isinstance(result, Answer), (
+            f"ask() must return Answer per spec §6.1, got {type(result)}"
+        )
+        assert result.value == "yes"
 
     @pytest.mark.asyncio
     async def test_queue_interviewer_ask_question_returns_answer(self):
@@ -654,12 +652,13 @@ class TestInterviewerAnswer:
         assert answer.value == "yes"
 
     @pytest.mark.asyncio
-    async def test_auto_approve_interviewer_returns_str(self):
-        """AutoApproveInterviewer.ask() must return str."""
-        from attractor_pipeline.handlers.human import AutoApproveInterviewer
+    async def test_auto_approve_interviewer_ask_returns_answer(self):
+        """AutoApproveInterviewer.ask() must return Answer per spec §6.4."""
+        from attractor_pipeline.handlers.human import Answer, AutoApproveInterviewer, Question
 
         interviewer = AutoApproveInterviewer()
-        result = await interviewer.ask("Approve?")
-        assert isinstance(result, str), (
-            f"AutoApproveInterviewer.ask() must return str, got {type(result)}"
+        question = Question(text="Approve?")
+        result = await interviewer.ask(question)
+        assert isinstance(result, Answer), (
+            f"AutoApproveInterviewer.ask() must return Answer, got {type(result)}"
         )

@@ -13,6 +13,7 @@ from attractor_pipeline.graph import Edge, Graph, Node
 from attractor_pipeline.handlers.human import (
     AutoApproveInterviewer,
     CallbackInterviewer,
+    Question,
     QuestionType,
     QueueInterviewer,
 )
@@ -32,7 +33,7 @@ class TestCallbackInterviewer:
 
     @pytest.mark.anyio
     async def test_callback_receives_arguments(self) -> None:
-        """The callback receives question, options, and node_id."""
+        """The callback receives question text, options, and stage/node_id."""
         received: dict[str, object] = {}
 
         async def cb(
@@ -46,9 +47,9 @@ class TestCallbackInterviewer:
             return "callback-answer"
 
         interviewer = CallbackInterviewer(cb)
-        result = await interviewer.ask("What?", ["a", "b"], node_id="n1")
+        result = await interviewer.ask(Question(text="What?", options=["a", "b"], stage="n1"))
 
-        assert result == "callback-answer"
+        assert result.value == "callback-answer"
         assert received["question"] == "What?"
         assert received["options"] == ["a", "b"]
         assert received["node_id"] == "n1"
@@ -65,12 +66,12 @@ class TestCallbackInterviewer:
             return f"got: {question}"
 
         interviewer = CallbackInterviewer(cb)
-        result = await interviewer.ask("Hello?")
-        assert result == "got: Hello?"
+        result = await interviewer.ask(Question(text="Hello?"))
+        assert result.value == "got: Hello?"
 
     @pytest.mark.anyio
     async def test_callback_none_node_id_when_empty(self) -> None:
-        """Empty node_id string is passed as None to the callback."""
+        """Empty stage is passed as None to the callback."""
         received_node_id: list[str | None] = []
 
         async def cb(
@@ -82,7 +83,7 @@ class TestCallbackInterviewer:
             return "ok"
 
         interviewer = CallbackInterviewer(cb)
-        await interviewer.ask("q")
+        await interviewer.ask(Question(text="q"))
         assert received_node_id[0] is None
 
 
@@ -98,40 +99,42 @@ class TestQueueInterviewer:
     async def test_returns_answers_in_order(self) -> None:
         interviewer = QueueInterviewer(["first", "second", "third"])
 
-        assert await interviewer.ask("q1") == "first"
-        assert await interviewer.ask("q2") == "second"
-        assert await interviewer.ask("q3") == "third"
+        assert (await interviewer.ask(Question(text="q1"))).value == "first"
+        assert (await interviewer.ask(Question(text="q2"))).value == "second"
+        assert (await interviewer.ask(Question(text="q3"))).value == "third"
 
     @pytest.mark.anyio
     async def test_returns_skipped_when_exhausted(self) -> None:
-        """Spec §6.4: returns 'SKIPPED' when queue is empty."""
+        """Spec §6.4: returns Answer(value='SKIPPED') when queue is empty."""
         interviewer = QueueInterviewer(["only-one"])
-        await interviewer.ask("q1")
+        await interviewer.ask(Question(text="q1"))
 
-        result = await interviewer.ask("q2")
-        assert result == "SKIPPED"
+        result = await interviewer.ask(Question(text="q2"))
+        assert result.value == "SKIPPED"
 
     @pytest.mark.anyio
     async def test_empty_queue_returns_skipped_immediately(self) -> None:
-        """Spec §6.4: empty queue returns 'SKIPPED' on first ask."""
+        """Spec §6.4: empty queue returns Answer(value='SKIPPED') on first ask."""
         interviewer = QueueInterviewer([])
 
-        result = await interviewer.ask("q1")
-        assert result == "SKIPPED"
+        result = await interviewer.ask(Question(text="q1"))
+        assert result.value == "SKIPPED"
 
     @pytest.mark.anyio
-    async def test_ignores_options_and_node_id(self) -> None:
-        """Queue answers are returned regardless of question content."""
+    async def test_ignores_question_content_except_options(self) -> None:
+        """Queue answers are returned regardless of question text."""
         interviewer = QueueInterviewer(["yes"])
-        result = await interviewer.ask("Approve?", options=["yes", "no"], node_id="gate1")
-        assert result == "yes"
+        result = await interviewer.ask(
+            Question(text="Approve?", options=["yes", "no"], stage="gate1")
+        )
+        assert result.value == "yes"
 
     @pytest.mark.anyio
     async def test_original_list_not_mutated(self) -> None:
         """QueueInterviewer copies the input list."""
         answers = ["a", "b"]
         interviewer = QueueInterviewer(answers)
-        await interviewer.ask("q")
+        await interviewer.ask(Question(text="q"))
         assert answers == ["a", "b"]  # original unchanged
 
 
@@ -159,36 +162,38 @@ class TestQuestionType:
 
     @pytest.mark.anyio
     async def test_auto_approve_accepts_question_type(self) -> None:
-        """Existing AutoApproveInterviewer accepts the new parameter."""
+        """AutoApproveInterviewer works with CONFIRM question type."""
         interviewer = AutoApproveInterviewer()
         result = await interviewer.ask(
-            "OK?",
-            options=["yes", "no"],
-            question_type=QuestionType.CONFIRM,
+            Question(text="OK?", options=["yes", "no"], question_type=QuestionType.CONFIRM)
         )
-        assert result == "yes"
+        assert result.value == "yes"
 
     @pytest.mark.anyio
     async def test_queue_accepts_question_type(self) -> None:
-        """QueueInterviewer accepts the new question_type parameter."""
+        """QueueInterviewer works with SINGLE_SELECT question type."""
         interviewer = QueueInterviewer(["answer"])
         result = await interviewer.ask(
-            "Pick one",
-            options=["a", "b"],
-            question_type=QuestionType.SINGLE_SELECT,
+            Question(
+                text="Pick one",
+                options=["a", "b"],
+                question_type=QuestionType.SINGLE_SELECT,
+            )
         )
-        assert result == "answer"
+        assert result.value == "answer"
 
     @pytest.mark.anyio
     async def test_callback_accepts_question_type(self) -> None:
-        """CallbackInterviewer accepts the new question_type parameter."""
+        """CallbackInterviewer works with MULTI_SELECT question type."""
 
         async def cb(q: str, opts: list[str] | None, nid: str | None) -> str:
             return "cb"
 
         interviewer = CallbackInterviewer(cb)
-        result = await interviewer.ask("Pick", question_type=QuestionType.MULTI_SELECT)
-        assert result == "cb"
+        result = await interviewer.ask(
+            Question(text="Pick", question_type=QuestionType.MULTI_SELECT)
+        )
+        assert result.value == "cb"
 
 
 # ------------------------------------------------------------------ #
