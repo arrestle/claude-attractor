@@ -477,6 +477,7 @@ class TestMiddlewareChain:
         class ProtocolMiddleware(Middleware):
             def before_request(self, req):
                 return req
+
             def after_response(self, req, resp):
                 return resp
 
@@ -499,3 +500,36 @@ class TestMiddlewareChain:
         assert isinstance(result, MiddlewareClient), (
             "apply_middleware with empty list must return a MiddlewareClient"
         )
+
+
+class TestHttpServer:
+    """Task 6 — §11.11.5: POST /run calls run_pipeline, not a stub."""
+
+    @pytest.mark.asyncio
+    async def test_post_run_calls_run_pipeline(self):
+        """POST /run must call run_pipeline(), not just sleep(0)."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from starlette.testclient import TestClient
+
+        from attractor_pipeline.server.app import app
+
+        pipeline_called = []
+
+        async def mock_run_pipeline(*args, **kwargs):
+            pipeline_called.append(args)
+            mock_result = MagicMock()
+            mock_result.status = "completed"
+            mock_result.context = {}
+            return mock_result
+
+        # Patch wherever run_pipeline is imported in app.py
+        with patch("attractor_pipeline.server.app.run_pipeline", mock_run_pipeline):
+            client = TestClient(app)
+            response = client.post("/run", json={"pipeline": {}, "input": {}})
+
+        assert response.status_code == 202, f"Expected 202, got {response.status_code}"
+        # Give the background task a moment to execute
+        await asyncio.sleep(0.1)
+        assert len(pipeline_called) > 0, "run_pipeline must be called when POST /run is received"

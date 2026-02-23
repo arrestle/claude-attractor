@@ -23,6 +23,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from attractor_pipeline.engine.runner import HandlerRegistry, run_pipeline
+
 # In-memory pipeline run store (replace with persistent store for production)
 _runs: dict[str, dict[str, Any]] = {}
 
@@ -52,11 +54,19 @@ async def _execute_pipeline(run_id: str) -> None:
 
     run["status"] = "running"
     try:
-        # Placeholder: real implementation would call the pipeline runner.
-        # e.g.  await PipelineRunner(graph=run["pipeline"]).run(run["input"])
-        await asyncio.sleep(0)  # yield to event loop; replace with real call
-        run["status"] = "completed"
-        run["output"] = {}
+        graph = run.get("pipeline")
+        registry = HandlerRegistry()
+
+        if graph is None:
+            run["status"] = "completed"
+            run["output"] = {}
+            return
+
+        result = await run_pipeline(graph, registry)
+        run["status"] = result.status if hasattr(result, "status") else "completed"
+        run["output"] = (
+            dict(result.context) if hasattr(result, "context") and result.context else {}
+        )
     except asyncio.CancelledError:
         run["status"] = "cancelled"
         raise
