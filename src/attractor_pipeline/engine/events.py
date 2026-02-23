@@ -120,13 +120,17 @@ class StageRetrying(PipelineEvent):
     index: int
     attempt: int
     delay: float
+    error: str = ""
 
     @property
     def description(self) -> str:
-        return (
+        base = (
             f"Stage '{self.name}' [{self.index}] retrying"
             f" (attempt {self.attempt}, delay {self.delay:.1f}s)"
         )
+        if self.error:
+            return f"{base}: {self.error}"
+        return base
 
 
 # ---------------------------------------------------------------------------

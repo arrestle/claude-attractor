@@ -791,6 +791,7 @@ async def run_pipeline(
                         index=node_index - 1,
                         attempt=retry_count + 1,
                         delay=delay,
+                        error=result.failure_reason,
                     )
                 )
                 await anyio.sleep(delay)

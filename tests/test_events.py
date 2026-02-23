@@ -66,9 +66,16 @@ class TestEventTypes:
         assert e.will_retry is True
 
     def test_stage_retrying(self):
-        e = StageRetrying(name="build", index=0, attempt=2, delay=1.5)
+        e = StageRetrying(name="build", index=0, attempt=2, delay=1.5, error="timeout")
         assert e.attempt == 2
         assert e.delay == 1.5
+        assert e.error == "timeout"
+        assert "timeout" in e.description
+
+    def test_stage_retrying_without_error(self):
+        e = StageRetrying(name="build", index=0, attempt=1, delay=0.0)
+        assert e.error == ""
+        assert ":" not in e.description.split(")")[-1]
 
     def test_parallel_started(self):
         e = ParallelStarted(branch_count=3)
@@ -400,6 +407,42 @@ class TestRunnerEventEmission:
             f"StageCompleted should not be emitted for a permanently-failed node, "
             f"but got {len(completed_events)}: {completed_events}"
         )
+
+    @pytest.mark.asyncio
+    async def test_stage_retrying_includes_error_reason(self):
+        """StageRetrying events include the failure reason so users can diagnose retries."""
+        from attractor_pipeline.engine.runner import HandlerResult, Outcome
+
+        class AlwaysFailHandler:
+            async def execute(self, node, context, graph, logs_root, abort_signal=None):
+                return HandlerResult(
+                    status=Outcome.FAIL,
+                    failure_reason="Invalid API key",
+                )
+
+        g = parse_dot("""
+        digraph RetryError {
+            graph [goal="Retry error test"]
+            start     [shape=Mdiamond]
+            fail_node [shape=hexagon, child_graph="dummy.dot", max_retries=2]
+            done      [shape=Msquare]
+            start -> fail_node -> done
+        }
+        """)
+        registry = HandlerRegistry()
+        register_default_handlers(registry)
+        registry.register("manager", AlwaysFailHandler())
+
+        events: list = []
+        await run_pipeline(g, registry, on_event=events.append)
+
+        retry_events = [e for e in events if isinstance(e, StageRetrying) and e.name == "fail_node"]
+        assert len(retry_events) >= 1
+        for e in retry_events:
+            assert e.error == "Invalid API key", (
+                f"StageRetrying should include failure reason, got: {e.error!r}"
+            )
+            assert "Invalid API key" in e.description
 
 
 # ------------------------------------------------------------------ #

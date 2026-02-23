@@ -438,6 +438,18 @@ src/
 | HTTP server mode + SSE events (9 endpoints) | Done | S9.5-9.6 |
 | CLI (run + validate) | Done | -- |
 
+## Spec Customizations
+
+Enhancements beyond the upstream [Attractor nlspec](https://github.com/strongdm/attractor), driven by real user feedback:
+
+| Enhancement | Spec Section | Status | Reference |
+|-------------|-------------|--------|-----------|
+| R15 validation rule: hexagon nodes require `child_graph` | S7.2 | Implemented | [issue #36](https://github.com/samueljklee/attractor/issues/36) |
+| Section 9.6 event system with `--verbose` CLI flag | S9.6 | Implemented | [issue #36](https://github.com/samueljklee/attractor/issues/36) |
+| Add `error` field to `StageRetrying` event | S9.6 | Proposed upstream | [strongdm/attractor#4](https://github.com/strongdm/attractor/pull/4) |
+
+These changes are backward-compatible with the upstream spec. Proposed changes are submitted as PRs to the upstream repository.
+
 ## Testing
 
 ```bash
