@@ -189,13 +189,17 @@ async def _apply_v4a_patch(patch_text: str, base_dir: str | None = None) -> str:
     """
     import os
 
+    from attractor_agent.environment import LocalEnvironment
+    from attractor_agent.tools.core import get_environment
+
+    env = get_environment()
     base = Path(base_dir or os.getcwd())
     lines = patch_text.splitlines()
     results: list[str] = []
     i = 0
 
     # Skip leading *** Begin Patch line
-    while i < len(lines) and not lines[i].startswith("*** Begin Patch"):
+    while i < len(lines) and not lines[i].startswith(_V4A_BEGIN):
         i += 1
     if i < len(lines):
         i += 1  # consume *** Begin Patch
@@ -209,6 +213,14 @@ async def _apply_v4a_patch(patch_text: str, base_dir: str | None = None) -> str:
         elif line.startswith("*** Add File: "):
             path_str = line[len("*** Add File: ") :].strip()
             file_path = Path(path_str) if Path(path_str).is_absolute() else base / path_str
+            resolved = file_path.resolve()
+            path_error = _check_path_allowed(resolved)
+            if path_error:
+                results.append(f"Error: {path_error}")
+                i += 1
+                while i < len(lines) and not lines[i].startswith("***"):
+                    i += 1
+                continue
             i += 1
             added: list[str] = []
             while i < len(lines) and not lines[i].startswith("***"):
@@ -216,15 +228,23 @@ async def _apply_v4a_patch(patch_text: str, base_dir: str | None = None) -> str:
                 if raw.startswith("+"):
                     added.append(raw[1:])
                 i += 1
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text("\n".join(added) + "\n", encoding="utf-8")
+            await env.write_file(str(resolved), "\n".join(added) + "\n")
             results.append(f"Created {file_path}")
 
         elif line.startswith("*** Delete File: "):
             path_str = line[len("*** Delete File: ") :].strip()
             file_path = Path(path_str) if Path(path_str).is_absolute() else base / path_str
-            if file_path.exists():
-                file_path.unlink()
+            resolved = file_path.resolve()
+            path_error = _check_path_allowed(resolved)
+            if path_error:
+                results.append(f"Error: {path_error}")
+                i += 1
+                continue
+            if await env.file_exists(str(resolved)):
+                if isinstance(env, LocalEnvironment):
+                    resolved.unlink()
+                else:
+                    await env.exec_shell(f"rm -f {resolved}")
                 results.append(f"Deleted {file_path}")
             else:
                 results.append(f"Warning: {file_path} not found for deletion")
@@ -233,21 +253,40 @@ async def _apply_v4a_patch(patch_text: str, base_dir: str | None = None) -> str:
         elif line.startswith("*** Update File: "):
             path_str = line[len("*** Update File: ") :].strip()
             file_path = Path(path_str) if Path(path_str).is_absolute() else base / path_str
+            resolved = file_path.resolve()
+            path_error = _check_path_allowed(resolved)
+            if path_error:
+                results.append(f"Error: {path_error}")
+                i += 1
+                while i < len(lines) and not lines[i].startswith("***"):
+                    i += 1
+                continue
             i += 1
 
             # Optional: *** Move to: new_path
             move_to: str | None = None
+            move_to_resolved: Path | None = None
             if i < len(lines) and lines[i].startswith("*** Move to: "):
                 move_to = lines[i][len("*** Move to: ") :].strip()
+                move_to_path = Path(move_to) if Path(move_to).is_absolute() else base / move_to
+                move_to_resolved = move_to_path.resolve()
+                move_to_error = _check_path_allowed(move_to_resolved)
+                if move_to_error:
+                    results.append(f"Error: {move_to_error}")
+                    i += 1
+                    while i < len(lines) and not lines[i].startswith("***"):
+                        i += 1
+                    continue
                 i += 1
 
-            if not file_path.exists():
+            if not await env.file_exists(str(resolved)):
                 results.append(f"Error: {file_path} not found for update")
                 while i < len(lines) and not lines[i].startswith("***"):
                     i += 1
                 continue
 
-            content_lines = file_path.read_text(encoding="utf-8").splitlines()
+            original = await env.read_file(str(resolved))
+            content_lines = original.splitlines()
 
             while i < len(lines) and lines[i].startswith("@@ "):
                 context_hint = lines[i][3:].strip()
@@ -259,14 +298,15 @@ async def _apply_v4a_patch(patch_text: str, base_dir: str | None = None) -> str:
                 content_lines = _apply_v4a_hunk(content_lines, hunk_lines, context_hint)
 
             new_content = "\n".join(content_lines) + "\n"
-            if move_to:
-                new_path = Path(move_to) if Path(move_to).is_absolute() else base / move_to
-                new_path.parent.mkdir(parents=True, exist_ok=True)
-                new_path.write_text(new_content, encoding="utf-8")
-                file_path.unlink()
-                results.append(f"Updated and moved {file_path} -> {new_path}")
+            if move_to_resolved:
+                await env.write_file(str(move_to_resolved), new_content)
+                if isinstance(env, LocalEnvironment):
+                    resolved.unlink()
+                else:
+                    await env.exec_shell(f"rm -f {resolved}")
+                results.append(f"Updated and moved {file_path} -> {move_to_resolved}")
             else:
-                file_path.write_text(new_content, encoding="utf-8")
+                await env.write_file(str(resolved), new_content)
                 results.append(f"Updated {file_path}")
 
         else:
@@ -293,8 +333,16 @@ def _apply_v4a_hunk(
 
     search_block = deletes if deletes else context[:1]
 
+    # First pass: exact match (respects indentation)
     anchor_idx = -1
     if search_block:
+        for idx, cl in enumerate(content_lines):
+            if cl == search_block[0]:
+                anchor_idx = idx
+                break
+
+    # Second pass: strip fallback (fuzzy)
+    if anchor_idx == -1 and search_block:
         for idx, cl in enumerate(content_lines):
             if cl.strip() == search_block[0].strip():
                 anchor_idx = idx

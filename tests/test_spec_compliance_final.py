@@ -843,3 +843,27 @@ class TestApplyPatchV4a:
         content = dest.read_text()
         assert "VERSION = 2" in content, "updated content must be in destination file"
         assert "NAME = 'old'" in content, "unchanged lines must be preserved"
+
+    @pytest.mark.asyncio
+    async def test_v4a_path_outside_allowed_roots_rejected(self, tmp_path):
+        """v4a patch targeting path outside allowed roots must be rejected."""
+        from attractor_agent.tools.core import _apply_patch, set_allowed_roots
+
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        disallowed = tmp_path / "disallowed"
+        disallowed.mkdir()
+
+        set_allowed_roots([str(allowed)])
+
+        patch = (
+            f"*** Begin Patch\n*** Add File: {disallowed}/evil.py\n+evil content\n*** End Patch\n"
+        )
+        result = await _apply_patch(patch)
+        # Should get an error, not silently create the file
+        assert not (disallowed / "evil.py").exists(), (
+            "v4a patch must not create files outside allowed roots"
+        )
+        assert "error" in result.lower() or "not allowed" in result.lower(), (
+            f"Expected error in result, got: {result}"
+        )
