@@ -15,6 +15,8 @@ Groups:
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from attractor_agent.session import SessionConfig
@@ -403,7 +405,6 @@ class TestMiddlewareChain:
     async def test_apply_middleware_calls_middleware_in_order(self):
         """apply_middleware() must call registered middleware in registration order:
         A(B(core)) means A_before -> B_before -> B_after -> A_after."""
-        from typing import Any
         from unittest.mock import AsyncMock, MagicMock
 
         from attractor_llm.client import Client
@@ -449,7 +450,6 @@ class TestMiddlewareChain:
     def test_client_middleware_param_emits_deprecation_warning(self):
         """Client(middleware=[...]) must emit DeprecationWarning per §8.1.6."""
         import warnings
-        from typing import Any
 
         from attractor_llm.client import Client
 
@@ -533,3 +533,89 @@ class TestHttpServer:
         # Give the background task a moment to execute
         await asyncio.sleep(0.1)
         assert len(pipeline_called) > 0, "run_pipeline must be called when POST /run is received"
+
+    @pytest.mark.asyncio
+    async def test_status_transitions_to_completed(self):
+        """Status must transition pending -> running -> completed after run_pipeline returns."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from starlette.testclient import TestClient
+
+        from attractor_pipeline.server.app import app
+
+        async def mock_run_pipeline(*args: Any, **kwargs: Any) -> Any:
+            result = MagicMock()
+            result.status = "completed"
+            result.context = {"output": "done"}
+            return result
+
+        with patch("attractor_pipeline.server.app.run_pipeline", mock_run_pipeline):
+            client = TestClient(app)
+            response = client.post("/run", json={"pipeline": {}, "input": "hello"})
+            assert response.status_code == 202
+            run_id = response.json()["id"]
+
+        # Allow background task to complete
+        await asyncio.sleep(0.2)
+
+        status_resp = client.get(f"/status/{run_id}")
+        assert status_resp.status_code == 200
+        assert status_resp.json()["status"] == "completed", (
+            f"Expected 'completed', got: {status_resp.json()}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_status_transitions_to_failed_on_exception(self):
+        """Status must transition to 'failed' when run_pipeline raises."""
+        import asyncio
+        from unittest.mock import patch
+
+        from starlette.testclient import TestClient
+
+        from attractor_pipeline.server.app import app
+
+        async def failing_run_pipeline(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("Pipeline execution failed")
+
+        with patch("attractor_pipeline.server.app.run_pipeline", failing_run_pipeline):
+            client = TestClient(app)
+            response = client.post("/run", json={"pipeline": {}, "input": "hello"})
+            assert response.status_code == 202
+            run_id = response.json()["id"]
+
+        await asyncio.sleep(0.2)
+
+        status_resp = client.get(f"/status/{run_id}")
+        assert status_resp.status_code == 200
+        data = status_resp.json()
+        assert data["status"] == "failed", f"Expected 'failed', got: {data}"
+        assert "error" in data, "Failed run must include error field"
+
+    @pytest.mark.asyncio
+    async def test_null_pipeline_completes_immediately(self):
+        """POST /run with null pipeline field completes without calling run_pipeline."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from starlette.testclient import TestClient
+
+        from attractor_pipeline.server.app import app
+
+        pipeline_called = []
+
+        async def mock_run_pipeline(*args: Any, **kwargs: Any) -> Any:
+            pipeline_called.append(True)
+            return MagicMock(status="completed", context={})
+
+        with patch("attractor_pipeline.server.app.run_pipeline", mock_run_pipeline):
+            client = TestClient(app)
+            response = client.post("/run", json={"pipeline": None, "input": "hello"})
+            assert response.status_code == 202
+            run_id = response.json()["id"]
+
+        await asyncio.sleep(0.2)
+
+        status_resp = client.get(f"/status/{run_id}")
+        assert status_resp.json()["status"] == "completed"
+        assert len(pipeline_called) == 0, "run_pipeline must NOT be called when pipeline is null"

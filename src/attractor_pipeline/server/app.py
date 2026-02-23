@@ -37,16 +37,8 @@ _runs: dict[str, dict[str, Any]] = {}
 async def _execute_pipeline(run_id: str) -> None:
     """Async pipeline execution coroutine dispatched by POST /run.
 
-    §11.11.5: POST /run must dispatch to the pipeline runner rather than
-    remaining a stub that only records the run_id.  This function is
-    scheduled via asyncio.create_task() and the task is stored in
-    ``_runs[run_id]["task"]`` so callers can await or cancel it.
-
-    The implementation transitions the run through:
-        pending  →  running  →  completed  (or  failed  on error)
-
-    Swap the body of this function for a real ``PipelineRunner.run()``
-    call once the runner is wired to the HTTP layer.
+    §11.11.5: Calls run_pipeline() rather than remaining a stub.
+    Transitions run status: pending -> running -> completed/failed/cancelled.
     """
     run = _runs.get(run_id)
     if run is None:
@@ -63,10 +55,8 @@ async def _execute_pipeline(run_id: str) -> None:
             return
 
         result = await run_pipeline(graph, registry)
-        run["status"] = result.status if hasattr(result, "status") else "completed"
-        run["output"] = (
-            dict(result.context) if hasattr(result, "context") and result.context else {}
-        )
+        run["status"] = result.status
+        run["output"] = dict(result.context) if result.context else {}
     except asyncio.CancelledError:
         run["status"] = "cancelled"
         raise
