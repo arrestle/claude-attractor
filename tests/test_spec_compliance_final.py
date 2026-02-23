@@ -180,6 +180,7 @@ class TestShellProcessCallback:
     def reset_process_callback(self):
         """Reset the module-level process callback after each test to avoid global state leakage."""
         from attractor_agent.tools.core import set_process_callback
+
         yield
         set_process_callback(None)
 
@@ -217,3 +218,54 @@ class TestShellProcessCallback:
         assert len(session._tracked_processes) > 0, (
             "shell command must register its subprocess with the session"
         )
+
+
+class TestParallelToolCalls:
+    """Task 3 — §9.3.5: supports_parallel_tool_calls propagated to ToolRegistry."""
+
+    def test_profile_parallel_false_propagates_to_registry(self):
+        """When profile.supports_parallel_tool_calls=False, registry must also be False."""
+        from unittest.mock import MagicMock
+
+        from attractor_agent.session import Session, SessionConfig
+
+        mock_profile = MagicMock()
+        mock_profile.supports_parallel_tool_calls = False
+        mock_profile.get_tools.return_value = []
+        mock_profile.apply_to_config.side_effect = lambda c: c
+
+        session = Session(
+            client=MagicMock(),
+            config=SessionConfig(),
+            profile=mock_profile,
+        )
+        assert session._tool_registry.supports_parallel_tool_calls is False, (
+            "ToolRegistry.supports_parallel_tool_calls must reflect the profile's value"
+        )
+
+    def test_profile_parallel_true_propagates_to_registry(self):
+        """When profile.supports_parallel_tool_calls=True, registry must be True."""
+        from unittest.mock import MagicMock
+
+        from attractor_agent.session import Session, SessionConfig
+
+        mock_profile = MagicMock()
+        mock_profile.supports_parallel_tool_calls = True
+        mock_profile.get_tools.return_value = []
+        mock_profile.apply_to_config.side_effect = lambda c: c
+
+        session = Session(
+            client=MagicMock(),
+            config=SessionConfig(),
+            profile=mock_profile,
+        )
+        assert session._tool_registry.supports_parallel_tool_calls is True
+
+    def test_no_profile_registry_defaults_true(self):
+        """Without a profile, ToolRegistry.supports_parallel_tool_calls defaults True."""
+        from unittest.mock import MagicMock
+
+        from attractor_agent.session import Session, SessionConfig
+
+        session = Session(client=MagicMock(), config=SessionConfig())
+        assert session._tool_registry.supports_parallel_tool_calls is True
