@@ -359,10 +359,12 @@ def _wrap_call_next(mw: Any, next_handler: Any) -> Any:
 
 
 class _CallNextMiddlewareClient:
-    """Wraps a Client with a functional (call_next) middleware chain.
+    """Client wrapper that applies functional call-next middleware to complete() calls.
 
-    Used by apply_middleware() when middleware items are async callables
-    with the signature ``async (request, call_next) -> response``.
+    Note: ``stream()`` calls are delegated directly to the underlying client —
+    functional middleware does NOT intercept streaming calls. If streaming middleware
+    is required, use protocol-style middleware objects (with ``before_request`` /
+    ``after_response`` attributes) via the standard ``MiddlewareClient`` path.
     """
 
     def __init__(self, client: Any, middleware: list[Any]) -> None:
@@ -399,9 +401,26 @@ def apply_middleware(client: Any, middleware: list[Any]) -> Any:
     the chain is built using :class:`_CallNextMiddlewareClient` so that
     ``A(B(core))`` executes as: A_before → B_before → core → B_after → A_after.
 
+    Note: when functional-style middleware is used, ``stream()`` calls are
+    delegated directly to the underlying client — functional middleware does
+    NOT intercept streaming calls. If streaming middleware is required, use
+    protocol-style middleware objects (with ``before_request`` /
+    ``after_response`` attributes) via the standard :class:`MiddlewareClient`
+    path.
+
+    Mixing protocol-style and functional middleware in the same chain is not
+    supported and raises :class:`TypeError`.
+
     Returns a wrapped client that intercepts ``complete()`` calls.
     """
     import inspect
+
+    functional_count = sum(1 for mw in middleware if inspect.iscoroutinefunction(mw))
+    if 0 < functional_count < len(middleware):
+        raise TypeError(
+            "apply_middleware() does not support mixing protocol-style and "
+            "functional middleware in the same chain. Use one style consistently."
+        )
 
     if middleware and all(inspect.iscoroutinefunction(mw) for mw in middleware):
         return _CallNextMiddlewareClient(client, middleware)

@@ -466,3 +466,36 @@ class TestMiddlewareChain:
         assert any("deprecated" in m or "apply_middleware" in m for m in messages), (
             f"Warning must mention 'deprecated' or 'apply_middleware'. Got: {messages}"
         )
+
+    def test_apply_middleware_mixed_styles_raises_type_error(self):
+        """apply_middleware() must raise TypeError for mixed protocol/functional styles."""
+        from unittest.mock import MagicMock
+
+        from attractor_llm.client import Client
+        from attractor_llm.middleware import Middleware, apply_middleware
+
+        class ProtocolMiddleware(Middleware):
+            def before_request(self, req):
+                return req
+            def after_response(self, req, resp):
+                return resp
+
+        async def functional_mw(req, call_next):
+            return await call_next(req)
+
+        base = MagicMock(spec=Client)
+        with pytest.raises(TypeError, match="mixing protocol-style"):
+            apply_middleware(base, [ProtocolMiddleware(), functional_mw])
+
+    def test_apply_middleware_empty_list_returns_wrapped_client(self):
+        """apply_middleware([]) must return a wrapped client (not raise)."""
+        from unittest.mock import MagicMock
+
+        from attractor_llm.client import Client
+        from attractor_llm.middleware import MiddlewareClient, apply_middleware
+
+        base = MagicMock(spec=Client)
+        result = apply_middleware(base, [])
+        assert isinstance(result, MiddlewareClient), (
+            "apply_middleware with empty list must return a MiddlewareClient"
+        )
