@@ -796,3 +796,68 @@ class TestReasoningEffortGemini:
         await _run_reasoning_effort_test(gemini_client, GEMINI_MODEL, "gemini")
 
 
+# ================================================================== #
+# Task 23: Loop detection — §9.12.37-39
+# ================================================================== #
+
+
+async def _run_loop_detection_test(workspace: Path, client: Any, model: str, provider: str) -> None:
+    from attractor_agent.events import EventKind, SessionEvent
+
+    (workspace / "stuck.txt").write_text("loop bait\n")
+    profile, tools = _get_profile_and_tools(provider)
+    config = SessionConfig(
+        model=model,
+        provider=provider,
+        max_turns=20,
+        loop_detection_window=4,
+        loop_detection_threshold=3,
+    )
+    config = profile.apply_to_config(config)
+    events: list[EventKind] = []
+
+    async with client:
+        session = Session(client=client, config=config, tools=tools)
+
+        async def capture(e: SessionEvent) -> None:
+            events.append(e.kind)
+
+        session._emitter.on(capture)
+        result = await session.submit(
+            f"Read the file {workspace}/stuck.txt over and over, at least 10 times, "
+            f"and tell me the content each time. Do nothing else."
+        )
+
+    assert EventKind.TURN_END in events or EventKind.TURN_LIMIT in events, (
+        "Session must terminate (loop detection or limit) on repetitive tool calls"
+    )
+    assert result is not None, "Session must return a result"
+
+
+class TestLoopDetectionAnthropic:
+    """§9.12.37: Anthropic loop detection."""
+
+    @skip_no_anthropic
+    @pytest.mark.asyncio
+    async def test_loop_detection(self, workspace, anthropic_client):
+        await _run_loop_detection_test(workspace, anthropic_client, ANTHROPIC_MODEL, "anthropic")
+
+
+class TestLoopDetectionOpenAI:
+    """§9.12.38: OpenAI loop detection."""
+
+    @skip_no_openai
+    @pytest.mark.asyncio
+    async def test_loop_detection(self, workspace, openai_client):
+        await _run_loop_detection_test(workspace, openai_client, OPENAI_MODEL, "openai")
+
+
+class TestLoopDetectionGemini:
+    """§9.12.39: Gemini loop detection."""
+
+    @skip_no_gemini
+    @pytest.mark.asyncio
+    async def test_loop_detection(self, workspace, gemini_client):
+        await _run_loop_detection_test(workspace, gemini_client, GEMINI_MODEL, "gemini")
+
+
