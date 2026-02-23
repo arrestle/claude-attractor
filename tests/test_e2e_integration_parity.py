@@ -124,8 +124,10 @@ class TestOpenAIFileCreation:
         hello_file = workspace / "hello.py"
         assert hello_file.exists(), "Agent should have created hello.py"
         content = hello_file.read_text()
-        assert "def greet" in content
-        assert "Hello from Attractor" in content
+        assert "def greet" in content, f"File should define greet(). Got:\n{content[:300]}"
+        assert "Hello from Attractor" in content, (
+            f"File should contain greeting. Got:\n{content[:300]}"
+        )
 
 
 class TestGeminiFileCreation:
@@ -151,8 +153,10 @@ class TestGeminiFileCreation:
         hello_file = workspace / "hello.py"
         assert hello_file.exists(), "Agent should have created hello.py"
         content = hello_file.read_text()
-        assert "def greet" in content
-        assert "Hello from Attractor" in content
+        assert "def greet" in content, f"File should define greet(). Got:\n{content[:300]}"
+        assert "Hello from Attractor" in content, (
+            f"File should contain greeting. Got:\n{content[:300]}"
+        )
 
 
 # ================================================================== #
@@ -184,8 +188,8 @@ class TestOpenAIReadAndEdit:
         content = target.read_text()
         assert "3306" in content, "Port should be changed to 3306"
         assert "5432" not in content, "Old port should be gone"
-        assert "DB_HOST" in content
-        assert "DB_NAME" in content
+        assert "DB_HOST" in content, f"DB_HOST should be preserved. Got:\n{content}"
+        assert "DB_NAME" in content, f"DB_NAME should be preserved. Got:\n{content}"
 
 
 class TestGeminiReadAndEdit:
@@ -210,9 +214,9 @@ class TestGeminiReadAndEdit:
             )
 
         content = target.read_text()
-        assert "3306" in content
-        assert "5432" not in content
-        assert "DB_HOST" in content
+        assert "3306" in content, f"Port should be changed to 3306. Got:\n{content}"
+        assert "5432" not in content, f"Old port should be gone. Got:\n{content}"
+        assert "DB_HOST" in content, f"DB_HOST should be preserved. Got:\n{content}"
 
 
 # ================================================================== #
@@ -349,9 +353,11 @@ class TestSubagentOpenAI:
             provider="openai",
             include_tools=False,
         )
-        assert result.depth == 1
-        assert len(result.text) > 5
-        assert "[::-1]" in result.text or "reverse" in result.text.lower()
+        assert result.depth == 1, f"Expected depth=1, got {result.depth}"
+        assert len(result.text) > 5, f"Expected non-trivial response, got: {result.text!r}"
+        assert "[::-1]" in result.text or "reverse" in result.text.lower(), (
+            f"Expected reversal one-liner, got: {result.text[:200]}"
+        )
 
     @skip_no_openai
     @pytest.mark.asyncio
@@ -368,10 +374,12 @@ class TestSubagentOpenAI:
             provider="openai",
             include_tools=True,
         )
-        assert result.depth == 1
+        assert result.depth == 1, f"Expected depth=1, got {result.depth}"
         answer_file = workspace / "answer.txt"
         assert answer_file.exists(), "Subagent should have created answer.txt"
-        assert "42" in answer_file.read_text().strip()
+        assert "42" in answer_file.read_text().strip(), (
+            f"Expected '42' in answer.txt, got: {answer_file.read_text()!r}"
+        )
 
 
 class TestSubagentGemini:
@@ -393,9 +401,11 @@ class TestSubagentGemini:
             provider="gemini",
             include_tools=False,
         )
-        assert result.depth == 1
-        assert len(result.text) > 5
-        assert "[::-1]" in result.text or "reverse" in result.text.lower()
+        assert result.depth == 1, f"Expected depth=1, got {result.depth}"
+        assert len(result.text) > 5, f"Expected non-trivial response, got: {result.text!r}"
+        assert "[::-1]" in result.text or "reverse" in result.text.lower(), (
+            f"Expected reversal one-liner, got: {result.text[:200]}"
+        )
 
     @skip_no_gemini
     @pytest.mark.asyncio
@@ -412,7 +422,9 @@ class TestSubagentGemini:
             provider="gemini",
             include_tools=True,
         )
-        assert result.depth == 1
+        assert result.depth == 1, f"Expected depth=1, got {result.depth}"
         answer_file = workspace / "answer.txt"
-        assert answer_file.exists()
-        assert "42" in answer_file.read_text().strip()
+        assert answer_file.exists(), "Subagent should have created answer.txt"
+        assert "42" in answer_file.read_text().strip(), (
+            f"Expected '42' in answer.txt, got: {answer_file.read_text()!r}"
+        )
