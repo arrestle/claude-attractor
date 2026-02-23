@@ -83,8 +83,8 @@ class SubagentManager:
         model: str | None = None,
         provider: str | None = None,
         system_prompt: str | None = None,
-        max_turns: int = 20,
-        max_tool_rounds: int = 15,
+        max_turns: int = 0,
+        max_tool_rounds: int = 0,
         abort_signal: AbortSignal | None = None,
         include_tools: bool = True,
         working_dir: str | None = None,
@@ -249,7 +249,7 @@ def create_interactive_tools(manager: SubagentManager, client: Any = None) -> li
         model: str = "",
         provider: str = "",
         system_prompt: str = "",
-        max_turns: int = 20,
+        max_turns: int = 0,
     ) -> str:
         if client is None:
             return (

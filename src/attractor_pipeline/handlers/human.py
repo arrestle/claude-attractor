@@ -100,38 +100,25 @@ class Interviewer(Protocol):
     answered by humans: console prompts, web UI, Slack, etc.
 
     Only ``ask()`` is required by the protocol.  Concrete classes
-    typically also expose ``ask_question()`` (bridged via the module-level
-    ``ask_question_via_ask()`` helper) but external implementors that only
-    provide ``ask()`` remain fully compatible.
+    typically also expose ``ask_question()`` for convenience but
+    both methods operate on the same ``Question`` / ``Answer`` types.
     """
 
-    async def ask(
-        self,
-        question: str,
-        options: list[str] | None = None,
-        node_id: str = "",
-        question_type: QuestionType | None = None,
-    ) -> str:
-        """Ask the human a question and return their response (flat API).
+    async def ask(self, question: Question) -> Answer:
+        """Ask the human a question and return their structured response.
 
-        §11.8.1 — Design note: ``ask()`` intentionally returns ``str``, not
-        ``Answer``.  This is the *minimum contract* of the ``Interviewer``
-        protocol so that external implementors only need to provide a simple
-        string-returning coroutine.  The richer ``ask_question() -> Answer``
-        method is available on all concrete implementations (bridged via
-        ``ask_question_via_ask()``) but is NOT part of the Protocol itself,
-        keeping the protocol surface minimal and easy to satisfy.
+        §11.8.1 / §6.1 — ask() accepts a structured Question and returns
+        a structured Answer so that all context (options, type hints,
+        metadata) is available to the implementation and callers receive
+        a rich Answer object (value, selected_option, text).
 
         Args:
-            question: The question text to present.
-            options: Optional list of valid choices (e.g., ["yes", "no"]).
-            node_id: The pipeline node ID (for context).
-            question_type: Optional hint for the type of question.
-                If None, inferred from options: SINGLE_SELECT when
-                options are provided, FREE_TEXT otherwise.
+            question: Structured ``Question`` descriptor carrying the
+                question text, type hint, option list, default, and
+                any implementation-specific metadata.
 
         Returns:
-            The human's response string.
+            Structured ``Answer`` with value, selected_option, and text.
         """
         ...
 
@@ -142,27 +129,20 @@ class Interviewer(Protocol):
 
 
 async def ask_question_via_ask(interviewer: Interviewer, question: Question) -> Answer:
-    """Bridge from Question/Answer to the flat ask() API.
+    """Delegate to Interviewer.ask() with a structured Question.
 
-    Concrete Interviewer implementations delegate their ``ask_question()``
-    body here to avoid repeating the same conversion logic in every class.
-    External implementors that only implement ``ask()`` can call this
-    helper directly without needing to subclass anything.
+    Kept for backward compatibility with external implementors.
+    Since ask() now accepts Question and returns Answer directly,
+    this helper is a simple pass-through.
 
     Args:
         interviewer: Any object satisfying the ``Interviewer`` protocol.
         question: Structured ``Question`` descriptor.
 
     Returns:
-        Structured ``Answer`` with value, selected_option, and text.
+        Structured ``Answer`` from the interviewer.
     """
-    value = await interviewer.ask(
-        question=question.text,
-        options=question.options,
-        question_type=question.question_type,
-    )
-    selected = value if (question.options and value in question.options) else None
-    return Answer(value=value, selected_option=selected, text=value)
+    return await interviewer.ask(question)
 
 
 # ------------------------------------------------------------------ #
@@ -173,43 +153,34 @@ async def ask_question_via_ask(interviewer: Interviewer, question: Question) -> 
 class AutoApproveInterviewer:
     """Auto-approves all human gates. For testing and CI."""
 
-    async def ask(
-        self,
-        question: str,
-        options: list[str] | None = None,
-        node_id: str = "",
-        question_type: QuestionType | None = None,
-    ) -> str:
-        if options:
-            return options[0]
-        return "approved"
+    async def ask(self, question: Question) -> Answer:
+        if question.options:
+            value = question.options[0]
+            return Answer(value=value, selected_option=value, text=value)
+        return Answer(value="approved", text="approved")
 
     async def ask_question(self, question: Question) -> Answer:
-        return await ask_question_via_ask(self, question)
+        return await self.ask(question)
 
 
 class ConsoleInterviewer:
     """Prompts on stdin for human input. For CLI use."""
 
-    async def ask(
-        self,
-        question: str,
-        options: list[str] | None = None,
-        node_id: str = "",
-        question_type: QuestionType | None = None,
-    ) -> str:
+    async def ask(self, question: Question) -> Answer:
         import asyncio
 
-        prompt = f"\n[HUMAN GATE: {node_id}]\n{question}"
-        if options:
-            prompt += f"\nOptions: {', '.join(options)}"
+        prompt = f"\n[HUMAN GATE: {question.stage}]\n{question.text}"
+        if question.options:
+            prompt += f"\nOptions: {', '.join(question.options)}"
         prompt += "\n> "
 
         # Run input() in a thread to avoid blocking the event loop
-        return await asyncio.to_thread(input, prompt)
+        value = await asyncio.to_thread(input, prompt)
+        selected = value if (question.options and value in question.options) else None
+        return Answer(value=value, selected_option=selected, text=value)
 
     async def ask_question(self, question: Question) -> Answer:
-        return await ask_question_via_ask(self, question)
+        return await self.ask(question)
 
 
 class CallbackInterviewer:
@@ -228,17 +199,17 @@ class CallbackInterviewer:
     ) -> None:
         self._callback = callback
 
-    async def ask(
-        self,
-        question: str,
-        options: list[str] | None = None,
-        node_id: str = "",
-        question_type: QuestionType | None = None,
-    ) -> str:
-        return await self._callback(question, options, node_id or None)
+    async def ask(self, question: Question) -> Answer:
+        value = await self._callback(
+            question.text,
+            question.options,
+            question.stage or None,
+        )
+        selected = value if (question.options and value in question.options) else None
+        return Answer(value=value, selected_option=selected, text=value)
 
     async def ask_question(self, question: Question) -> Answer:
-        return await ask_question_via_ask(self, question)
+        return await self.ask(question)
 
 
 class QueueInterviewer:
@@ -246,28 +217,24 @@ class QueueInterviewer:
 
     Designed for deterministic testing: supply a list of answers
     up front and they are returned in order for each ``ask()`` call.
-    Returns ``"SKIPPED"`` when the queue is exhausted (Spec §6.4).
+    Returns an Answer with value ``"SKIPPED"`` when the queue is
+    exhausted (Spec §6.4).
     """
 
     def __init__(self, answers: list[str]) -> None:
         self._answers = list(answers)
         self._index = 0
 
-    async def ask(
-        self,
-        question: str,
-        options: list[str] | None = None,
-        node_id: str = "",
-        question_type: QuestionType | None = None,
-    ) -> str:
+    async def ask(self, question: Question) -> Answer:
         if self._index >= len(self._answers):
-            return "SKIPPED"
-        answer = self._answers[self._index]
+            return Answer(value="SKIPPED")
+        value = self._answers[self._index]
         self._index += 1
-        return answer
+        selected = value if (question.options and value in question.options) else None
+        return Answer(value=value, selected_option=selected, text=value)
 
     async def ask_question(self, question: Question) -> Answer:
-        return await ask_question_via_ask(self, question)
+        return await self.ask(question)
 
 
 class HumanHandler:
@@ -289,8 +256,8 @@ class HumanHandler:
         logs_root: Path | None,
         abort_signal: AbortSignal | None,
     ) -> HandlerResult:
-        # Build question from node's prompt/label
-        question = node.prompt or node.label or f"Approve '{node.id}'?"
+        # Build question text from node's prompt/label
+        question_text = node.prompt or node.label or f"Approve '{node.id}'?"
 
         # Extract options from outgoing edge labels
         edges = graph.outgoing_edges(node.id)
@@ -304,7 +271,6 @@ class HumanHandler:
             )
 
         # Infer question type from options (Spec §6, §11.8)
-        question_type: QuestionType | None = None
         if (
             options
             and len(options) == 2
@@ -322,24 +288,28 @@ class HumanHandler:
         else:
             question_type = QuestionType.FREE_TEXT
 
+        # Build structured Question (Spec §6.1)
+        question = Question(
+            text=question_text,
+            question_type=question_type,
+            options=options,
+            stage=node.id,
+        )
+
         # Emit interview event (Spec 9.6)
         _emitter: EventEmitter | None = context.get("_event_emitter")
         if _emitter:
-            _emitter.emit(InterviewStarted(question=question, stage=node.id))
+            _emitter.emit(InterviewStarted(question=question_text, stage=node.id))
         interview_start = _time.monotonic()
 
         # Ask the human
         try:
-            response = await self._interviewer.ask(
-                question=question,
-                options=options,
-                node_id=node.id,
-                question_type=question_type,
-            )
+            answer = await self._interviewer.ask(question)
+            response = answer.value
             if _emitter:
                 _emitter.emit(
                     InterviewCompleted(
-                        question=question,
+                        question=question_text,
                         answer=response,
                         duration=_time.monotonic() - interview_start,
                     )

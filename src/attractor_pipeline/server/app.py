@@ -23,6 +23,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from attractor_pipeline.engine.runner import HandlerRegistry, run_pipeline
+
 # In-memory pipeline run store (replace with persistent store for production)
 _runs: dict[str, dict[str, Any]] = {}
 
@@ -35,16 +37,8 @@ _runs: dict[str, dict[str, Any]] = {}
 async def _execute_pipeline(run_id: str) -> None:
     """Async pipeline execution coroutine dispatched by POST /run.
 
-    §11.11.5: POST /run must dispatch to the pipeline runner rather than
-    remaining a stub that only records the run_id.  This function is
-    scheduled via asyncio.create_task() and the task is stored in
-    ``_runs[run_id]["task"]`` so callers can await or cancel it.
-
-    The implementation transitions the run through:
-        pending  →  running  →  completed  (or  failed  on error)
-
-    Swap the body of this function for a real ``PipelineRunner.run()``
-    call once the runner is wired to the HTTP layer.
+    §11.11.5: Calls run_pipeline() rather than remaining a stub.
+    Transitions run status: pending -> running -> completed/failed/cancelled.
     """
     run = _runs.get(run_id)
     if run is None:
@@ -52,11 +46,17 @@ async def _execute_pipeline(run_id: str) -> None:
 
     run["status"] = "running"
     try:
-        # Placeholder: real implementation would call the pipeline runner.
-        # e.g.  await PipelineRunner(graph=run["pipeline"]).run(run["input"])
-        await asyncio.sleep(0)  # yield to event loop; replace with real call
-        run["status"] = "completed"
-        run["output"] = {}
+        graph = run.get("pipeline")
+        registry = HandlerRegistry()
+
+        if graph is None:
+            run["status"] = "completed"
+            run["output"] = {}
+            return
+
+        result = await run_pipeline(graph, registry)
+        run["status"] = result.status
+        run["output"] = dict(result.context) if result.context else {}
     except asyncio.CancelledError:
         run["status"] = "cancelled"
         raise

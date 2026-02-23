@@ -49,8 +49,8 @@ async def spawn_subagent(
     model: str | None = None,
     provider: str | None = None,
     system_prompt: str | None = None,
-    max_turns: int = 20,
-    max_tool_rounds: int = 15,
+    max_turns: int = 0,
+    max_tool_rounds: int = 0,
     abort_signal: AbortSignal | None = None,
     include_tools: bool = True,
     context: dict[str, Any] | None = None,
@@ -188,7 +188,7 @@ def _add_spawn_tool(
         model: str | None = None,
         provider: str | None = None,
         working_dir: str | None = None,
-        max_turns: int = 20,
+        max_turns: int = 0,
     ) -> str:
         try:
             result = await spawn_subagent(

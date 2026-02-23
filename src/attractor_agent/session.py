@@ -20,9 +20,14 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from attractor_agent.abort import AbortSignal
-from attractor_agent.environment import ExecutionEnvironment
+from attractor_agent.environment import ExecutionEnvironment, LocalEnvironment
 from attractor_agent.events import EventEmitter, EventKind, SessionEvent
-from attractor_agent.tools.core import set_environment, set_max_command_timeout
+from attractor_agent.tools.core import (
+    get_environment,
+    set_environment,
+    set_max_command_timeout,
+    set_process_callback,
+)
 
 # ProviderProfile lives in profiles.base which imports SessionConfig from this
 # module -- guard with TYPE_CHECKING to break the circular import.
@@ -74,8 +79,8 @@ class SessionConfig:
     model: str = "claude-sonnet-4-5"
     provider: str | None = None
     system_prompt: str = ""
-    max_turns: int = 50
-    max_tool_rounds_per_turn: int = 25
+    max_turns: int = 0  # 0 = unlimited (spec §9 SessionConfig)
+    max_tool_rounds_per_turn: int = 0  # 0 = unlimited (spec §9 SessionConfig)
     temperature: float | None = None
     reasoning_effort: str | None = None
     provider_options: dict[str, Any] | None = None
@@ -233,16 +238,27 @@ class Session:
         self._emitter = EventEmitter()
 
         # Tools
+        # §9.3.5: propagate parallel tool call support from profile to registry.
+        supports_parallel = profile.supports_parallel_tool_calls if profile is not None else True
+
         self._tool_registry = ToolRegistry(
             event_emitter=self._emitter,
             tool_output_limits=self._config.tool_output_limits,
             tool_line_limits=self._config.tool_line_limits,
+            supports_parallel_tool_calls=supports_parallel,  # §9.3.5
         )
         if tools:
             self._tool_registry.register_many(list(tools))
 
         # Wire config timeout ceiling to the shell tool's clamping logic
         set_max_command_timeout(self._config.max_command_timeout_ms)
+
+        # §9.1.6, §9.11.5: Register self.register_process as the spawn callback
+        # so _shell() commands auto-populate _tracked_processes for abort cleanup.
+        set_process_callback(self.register_process)
+        _env = get_environment()
+        if isinstance(_env, LocalEnvironment):
+            _env._spawn_callback = self.register_process
 
         # Steering queue: messages injected between tool rounds
         self._steer_queue: list[str] = []
@@ -263,9 +279,9 @@ class Session:
 
         # Tracked OS-level processes for graceful shutdown (§9.1.6, §9.11.5).
         # Populated by callers that spawn asyncio subprocesses and want them
-        # cleaned up on abort. Full integration requires env protocol changes
-        # (see _cleanup_on_abort Steps 2-4 comments).
-        self._tracked_processes: list[asyncio.subprocess.Process] = []
+        # cleaned up on abort. Accepts both asyncio and sync subprocess.Popen —
+        # duck-type compatible (both have .returncode and .send_signal()).
+        self._tracked_processes: list[Any] = []
 
         # Loop detection
         self._loop_detector = _LoopDetector(
@@ -303,17 +319,12 @@ class Session:
         """Access the tool registry to add/remove tools."""
         return self._tool_registry
 
-    def register_process(self, proc: asyncio.subprocess.Process) -> None:
+    def register_process(self, proc: Any) -> None:
         """Register an OS subprocess for cleanup on abort. Spec §9.1.6.
 
-        The process will be sent SIGTERM (then SIGKILL after 2 s) when the
-        session is aborted.  Tools that spawn subprocesses can call this to
-        ensure cleanup without requiring direct access to the shutdown sequence.
-
-        Usage::
-
-            proc = await asyncio.create_subprocess_shell(...)
-            session.register_process(proc)
+        Accepts both asyncio.subprocess.Process (for async subprocesses) and
+        subprocess.Popen (for sync subprocesses run via LocalEnvironment thread workers).
+        GIL-atomic append in CPython; needs threading.Lock under no-GIL mode.
         """
         self._tracked_processes.append(proc)
 
@@ -461,7 +472,9 @@ class Session:
                     },
                 )
             )
-            if self._abort.is_set:
+            # §9.10.4: emit SESSION_END whenever session transitions to CLOSED
+            # (abort OR auth error). Normal turns leave state=IDLE — no SESSION_END.
+            if self._state == SessionState.CLOSED:
                 await self._emitter.emit(SessionEvent(kind=EventKind.SESSION_END))
 
         return result
@@ -497,7 +510,7 @@ class Session:
                 return "[Session aborted]"
 
             # Check turn limit
-            if self._turn_count > self._config.max_turns:
+            if self._config.max_turns > 0 and self._turn_count > self._config.max_turns:
                 await self._emitter.emit(
                     SessionEvent(
                         kind=EventKind.TURN_LIMIT,
@@ -507,7 +520,10 @@ class Session:
                 return "[Turn limit reached]"
 
             # Check tool round limit
-            if tool_round >= self._config.max_tool_rounds_per_turn:
+            if (
+                self._config.max_tool_rounds_per_turn > 0
+                and tool_round >= self._config.max_tool_rounds_per_turn
+            ):
                 await self._emitter.emit(
                     SessionEvent(
                         kind=EventKind.TURN_LIMIT,
@@ -811,6 +827,10 @@ class Session:
         # --- Step 3: Wait up to 2 seconds for processes to exit. ---
         if _alive:
             _done, _pending = await asyncio.wait(
+                # FIXME(Task 2): proc.wait() is a coroutine for asyncio.subprocess.Process but
+                # returns int for subprocess.Popen (wired by Task 2 via LocalEnvironment).
+                # asyncio.create_task() will raise TypeError on real abort with shell processes.
+                # Fix: branch on type or use asyncio.to_thread(proc.wait) for Popen objects.
                 [asyncio.create_task(proc.wait()) for proc in _alive],
                 timeout=2.0,
             )

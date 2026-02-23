@@ -510,54 +510,48 @@ async def test_session_start_not_double_emitted_with_context_manager() -> None:
 
 
 # ------------------------------------------------------------------ #
-# Item 10 §11.8.1 -- Interviewer.ask() returns str by design
+# Item 10 §11.8.1 -- Interviewer.ask() accepts Question, returns Answer
 # ------------------------------------------------------------------ #
 
 
-def test_interviewer_ask_signature_returns_str() -> None:
-    """Interviewer.ask() is typed as -> str (minimum contract)."""
+def test_interviewer_ask_signature_returns_answer() -> None:
+    """Interviewer.ask() is typed as -> Answer per spec §6.1 / §11.8."""
     import inspect
 
-    from attractor_pipeline.handlers.human import Interviewer
+    from attractor_pipeline.handlers.human import Answer, Interviewer
 
     try:
         sig = inspect.signature(Interviewer.ask)
         ret = sig.return_annotation
         # `from __future__ import annotations` makes Python store annotations as
-        # strings (PEP 563), so the return annotation may be either the `str`
-        # class or the string literal "str".  Accept both.
-        assert ret in (str, "str", inspect.Parameter.empty), (
-            f"Expected str return, got {ret!r}"
+        # strings (PEP 563), so the return annotation may be either the Answer
+        # class or the string literal "Answer".  Accept both.
+        assert ret in (Answer, "Answer", inspect.Parameter.empty), (
+            f"Expected Answer return, got {ret!r}"
         )
     except (ValueError, TypeError):
         pass  # Protocol methods may not be inspectable in all Python versions
 
 
-def test_interviewer_ask_docstring_notes_intentional_str_return() -> None:
-    """Interviewer.ask() docstring mentions the intentional str return contract."""
+def test_interviewer_ask_docstring_notes_spec_contract() -> None:
+    """Interviewer.ask() docstring references the spec contract (§11.8 / §6.1)."""
     from attractor_pipeline.handlers.human import Interviewer
 
     doc = Interviewer.ask.__doc__ or ""
-    # Should mention that str return is intentional / minimum contract
+    # Should mention the spec section or structured types
     assert any(
-        kw in doc.lower() for kw in ("intentional", "minimum contract", "protocol", "§11.8")
-    ), f"Docstring should note the intentional str return. Got: {doc[:200]}"
+        kw in doc.lower() for kw in ("§11.8", "§6.1", "question", "answer", "protocol", "spec")
+    ), f"Docstring should reference the spec contract. Got: {doc[:200]}"
 
 
 @pytest.mark.asyncio
 async def test_ask_question_via_ask_bridges_to_answer() -> None:
-    """ask_question_via_ask() wraps the str result into an Answer."""
+    """ask_question_via_ask() passes Question to ask() and returns Answer."""
     from attractor_pipeline.handlers.human import Answer, Question, ask_question_via_ask
 
     class _StubInterviewer:
-        async def ask(
-            self,
-            question: str,
-            options: list[str] | None = None,
-            node_id: str = "",
-            question_type: Any = None,
-        ) -> str:
-            return "yes"
+        async def ask(self, question: Question) -> Answer:
+            return Answer(value="yes")
 
     answer = await ask_question_via_ask(_StubInterviewer(), Question(text="Are you sure?"))
     assert isinstance(answer, Answer)
@@ -720,9 +714,7 @@ def test_loop_detector_threshold4_catches_3cycle_divisibility_blind_spot() -> No
     ]
 
     results = [det.record(name, args) for name, args in calls]
-    assert any(results), (
-        "threshold=4 should detect a 3-cycle (divisibility blind spot fix)"
-    )
+    assert any(results), "threshold=4 should detect a 3-cycle (divisibility blind spot fix)"
 
 
 def test_loop_detector_still_catches_simple_repetition() -> None:
