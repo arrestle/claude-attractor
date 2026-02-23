@@ -262,3 +262,66 @@ class TestGeminiShellExecution:
         assert "SHELL_OK" in result, f"Agent must report shell output. Got: {result[:200]}"
 
 
+# ================================================================== #
+# Task 14: Parallel tool calls — §9.12.25-27
+# ================================================================== #
+
+
+class TestParallelToolCallsOpenAI:
+    """§9.12.25-26: OpenAI issues parallel tool calls when appropriate."""
+
+    @skip_no_openai
+    @pytest.mark.asyncio
+    async def test_parallel_file_reads(self, workspace, openai_client):
+        """Agent reads two files in parallel (both tool calls in single turn)."""
+        (workspace / "file_a.txt").write_text("Content of file A")
+        (workspace / "file_b.txt").write_text("Content of file B")
+
+        profile, tools = _get_profile_and_tools("openai")
+        config = SessionConfig(model=OPENAI_MODEL, provider="openai", max_turns=5)
+        config = profile.apply_to_config(config)
+
+        async with openai_client:
+            session = Session(client=openai_client, config=config, tools=tools)
+            result = await session.submit(
+                f"Read BOTH files {workspace}/file_a.txt AND {workspace}/file_b.txt "
+                f"and tell me the content of each."
+            )
+
+        assert "Content of file A" in result, (
+            f"Agent must report file A content. Got: {result[:300]}"
+        )
+        assert "Content of file B" in result, (
+            f"Agent must report file B content. Got: {result[:300]}"
+        )
+
+
+class TestParallelToolCallsGemini:
+    """§9.12.27: Gemini issues parallel tool calls when appropriate."""
+
+    @skip_no_gemini
+    @pytest.mark.asyncio
+    async def test_parallel_file_reads(self, workspace, gemini_client):
+        """Agent reads two files in parallel."""
+        (workspace / "file_a.txt").write_text("Content of file A")
+        (workspace / "file_b.txt").write_text("Content of file B")
+
+        profile, tools = _get_profile_and_tools("gemini")
+        config = SessionConfig(model=GEMINI_MODEL, provider="gemini", max_turns=5)
+        config = profile.apply_to_config(config)
+
+        async with gemini_client:
+            session = Session(client=gemini_client, config=config, tools=tools)
+            result = await session.submit(
+                f"Read BOTH files {workspace}/file_a.txt AND {workspace}/file_b.txt "
+                f"and tell me the content of each."
+            )
+
+        assert "Content of file A" in result, (
+            f"Agent must report file A content. Got: {result[:300]}"
+        )
+        assert "Content of file B" in result, (
+            f"Agent must report file B content. Got: {result[:300]}"
+        )
+
+
