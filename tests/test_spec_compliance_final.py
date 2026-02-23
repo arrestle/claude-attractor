@@ -731,6 +731,14 @@ class TestAnthropicDescriptions:
 class TestApplyPatchV4a:
     """Task 10 — Appendix A: apply_patch handles v4a '*** Begin Patch' format."""
 
+    @pytest.fixture(autouse=True)
+    def reset_allowed_roots(self):
+        """Reset module-level allowed roots after each test to avoid stale path references."""
+        from attractor_agent.tools.core import set_allowed_roots
+
+        yield
+        set_allowed_roots([])
+
     @pytest.mark.asyncio
     async def test_v4a_add_file(self, tmp_path):
         """*** Add File: creates a new file with the given lines."""
