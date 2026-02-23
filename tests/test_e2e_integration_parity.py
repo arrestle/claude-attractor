@@ -703,3 +703,51 @@ class TestTruncationGemini:
         await _run_truncation_test(workspace, gemini_client, GEMINI_MODEL, "gemini")
 
 
+# ================================================================== #
+# Task 21: Steering mid-task — §9.12.28-30
+# ================================================================== #
+
+
+async def _run_steering_test(workspace: Path, client: Any, model: str, provider: str) -> None:
+    (workspace / "target.txt").write_text("original content\n")
+    profile, tools = _get_profile_and_tools(provider)
+    config = SessionConfig(model=model, provider=provider, max_turns=10)
+    config = profile.apply_to_config(config)
+    async with client:
+        session = Session(client=client, config=config, tools=tools)
+        await session.submit(f"Read the file {workspace}/target.txt and summarize it.")
+        session.steer("Actually, instead of summarizing, overwrite the file with 'STEERED CONTENT'")
+        result = await session.submit("Please proceed with the updated instruction.")
+    content = (workspace / "target.txt").read_text()
+    assert "STEERED" in content or "steered" in content.lower(), (
+        f"Agent should incorporate steering. File: {content!r}, result: {result[:100]}"
+    )
+
+
+class TestSteeringAnthropic:
+    """§9.12.28: Anthropic steering mid-task."""
+
+    @skip_no_anthropic
+    @pytest.mark.asyncio
+    async def test_steering_mid_task(self, workspace, anthropic_client):
+        await _run_steering_test(workspace, anthropic_client, ANTHROPIC_MODEL, "anthropic")
+
+
+class TestSteeringOpenAI:
+    """§9.12.29: OpenAI steering mid-task."""
+
+    @skip_no_openai
+    @pytest.mark.asyncio
+    async def test_steering_mid_task(self, workspace, openai_client):
+        await _run_steering_test(workspace, openai_client, OPENAI_MODEL, "openai")
+
+
+class TestSteeringGemini:
+    """§9.12.30: Gemini steering mid-task."""
+
+    @skip_no_gemini
+    @pytest.mark.asyncio
+    async def test_steering_mid_task(self, workspace, gemini_client):
+        await _run_steering_test(workspace, gemini_client, GEMINI_MODEL, "gemini")
+
+
