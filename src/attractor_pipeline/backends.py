@@ -219,11 +219,15 @@ class ClaudeCodeBackend:
         working_dir: str | None = None,
         max_turns: int = 10,
         model: str | None = None,
+        output_dir: str | None = None,
+        persona_dir: str | None = None,
     ) -> None:
         self._claude_bin = claude_bin or self._find_claude_binary()
         self._working_dir = working_dir
         self._max_turns = max_turns
         self._model = model
+        self._output_dir = output_dir
+        self._persona_dir = persona_dir
 
     @staticmethod
     def _find_claude_binary() -> str:
@@ -247,7 +251,7 @@ class ClaudeCodeBackend:
         enriched = self._build_prompt(node, prompt, context)
         timeout = self._parse_timeout(node.timeout) or 900.0
 
-        cmd = [self._claude_bin, "--print"]
+        cmd = [self._claude_bin, "--print", "--verbose"]
         if self._max_turns:
             cmd.extend(["--max-turns", str(self._max_turns)])
         model = node.llm_model or self._model
@@ -272,6 +276,17 @@ class ClaudeCodeBackend:
                 failure_reason=f"claude-code timed out after {timeout}s",
             )
 
+        if self._output_dir:
+            from pathlib import Path
+            import datetime
+            stage_dir = Path(self._output_dir) / (node.label or node.id).replace(" ", "_").lower()
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            if result.stderr:
+                (stage_dir / "claude_verbose.log").write_text(result.stderr)
+            if result.returncode == 0 and result.stdout.strip():
+                (stage_dir / "output.md").write_text(result.stdout.strip())
+                self._write_named_report(node.id, result.stdout.strip())
+
         if abort_signal and abort_signal.is_set:
             return HandlerResult(
                 status=Outcome.FAIL,
@@ -293,9 +308,10 @@ class ClaudeCodeBackend:
                         "Run: gcloud auth application-default login"
                     ),
                 )
+            combined = stderr or result.stdout.strip()
             return HandlerResult(
                 status=Outcome.RETRY,
-                failure_reason=f"claude-code exited {result.returncode}: {stderr[:500]}",
+                failure_reason=f"claude-code exited {result.returncode}: {combined[:500]}",
             )
 
         output = result.stdout.strip()
@@ -305,7 +321,41 @@ class ClaudeCodeBackend:
                 failure_reason="Empty response from claude-code",
             )
 
+        if output.startswith("Error: Reached max turns"):
+            return HandlerResult(
+                status=Outcome.FAIL,
+                failure_reason=output,
+            )
+
         return output
+
+    _REPORT_FILE_MAP = {
+        "detect_deployment": "TOPOLOGY.md",
+        "gen_customer_report": "Customer",
+        "gen_internal_report": "Internal",
+    }
+
+    def _write_named_report(self, node_id: str, content: str) -> None:
+        """Write report to the output dir root with HSBC-style naming.
+
+        Format: AAP-XXXXX-Customer-YYYY.MM.DD.md  (derived from logs-dir basename)
+        Topology is always TOPOLOGY.md.
+        """
+        if not self._output_dir:
+            return
+        mapping = self._REPORT_FILE_MAP.get(node_id)
+        if not mapping:
+            return
+        from pathlib import Path
+        import datetime
+        out = Path(self._output_dir)
+        if mapping == "TOPOLOGY.md":
+            (out / mapping).write_text(content)
+            return
+        case_id = out.name
+        today = datetime.date.today().strftime("%Y.%m.%d")
+        filename = f"{case_id}-{mapping}-{today}.md"
+        (out / filename).write_text(content)
 
     def _build_prompt(self, node: Node, prompt: str, context: dict[str, Any]) -> str:
         parts: list[str] = []
@@ -327,11 +377,24 @@ class ClaudeCodeBackend:
 
         parts.append(f"## Task: {node.label or node.id}\n{prompt}")
 
-        parts.append(
+        instructions = (
             "## Instructions\n"
-            "Respond with your full analysis or output. "
+            "Output the FULL report/analysis content directly in your response. "
+            "Do NOT just describe what you would write — output the actual content. "
+            "Do NOT write to files — your stdout IS the deliverable. "
             "Do not ask clarifying questions — work with what you have."
         )
+        if self._persona_dir:
+            pd = self._persona_dir.rstrip("/")
+            instructions += (
+                f"\n\n## Persona & Templates\n"
+                f"The SRE persona directory is at: {pd}\n"
+                f"When the task references PERSONA.md, the full path is: {pd}/PERSONA.md\n"
+                f"When the task references templates/*, the full path is: {pd}/templates/*\n"
+                f"When the task references knowledge/*, the full path is: {pd}/knowledge/*\n"
+                "Follow the template structure exactly for report generation stages."
+            )
+        parts.append(instructions)
 
         return "\n\n".join(parts)
 

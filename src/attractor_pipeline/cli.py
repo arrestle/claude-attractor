@@ -87,6 +87,18 @@ def main() -> None:
         help="Max agentic turns per stage for claude-code (default: 10)",
     )
     run_parser.add_argument(
+        "--persona-dir",
+        type=str,
+        default=None,
+        help="Path to SRE persona directory (PERSONA.md, templates/, knowledge/)",
+    )
+    run_parser.add_argument(
+        "--auto-approve",
+        action="store_true",
+        default=False,
+        help="Auto-approve all human review gates (skip interactive prompts)",
+    )
+    run_parser.add_argument(
         "--logs-dir",
         type=str,
         default=None,
@@ -295,6 +307,8 @@ async def _cmd_run(args: argparse.Namespace) -> None:
             working_dir=getattr(args, "working_dir", None),
             max_turns=getattr(args, "max_turns", 10),
             model=model,
+            output_dir=getattr(args, "logs_dir", None),
+            persona_dir=getattr(args, "persona_dir", None),
         )
         print("Backend: ClaudeCode (claude-code CLI)")
     elif backend_choice == "direct":
@@ -313,8 +327,11 @@ async def _cmd_run(args: argparse.Namespace) -> None:
         print("Backend: AgentLoop (with tools)")
 
     # Set up handlers
+    from attractor_pipeline.handlers.human import AutoApproveInterviewer, ConsoleInterviewer
+
+    interviewer = AutoApproveInterviewer() if getattr(args, "auto_approve", False) else ConsoleInterviewer()
     registry = HandlerRegistry()
-    register_default_handlers(registry, codergen_backend=backend)
+    register_default_handlers(registry, codergen_backend=backend, interviewer=interviewer)
 
     # Set up logs directory
     logs_root = None
