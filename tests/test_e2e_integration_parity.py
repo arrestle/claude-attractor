@@ -12,6 +12,8 @@ Gemini:    uv run python -m pytest tests/test_e2e_integration_parity.py -k "Gemi
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,12 +27,15 @@ from attractor_agent.tools.core import ALL_CORE_TOOLS, set_allowed_roots
 
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
 GEMINI_KEY = os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 OPENAI_MODEL = "gpt-4.1-mini"
 GEMINI_MODEL = "gemini-2.0-flash"
+ANTHROPIC_MODEL = "claude-sonnet-4-5"
 
 skip_no_openai = pytest.mark.skipif(not OPENAI_KEY, reason="OPENAI_API_KEY not set")
 skip_no_gemini = pytest.mark.skipif(not GEMINI_KEY, reason="GOOGLE_API_KEY/GEMINI_API_KEY not set")
+skip_no_anthropic = pytest.mark.skipif(not ANTHROPIC_KEY, reason="ANTHROPIC_API_KEY not set")
 
 
 # ------------------------------------------------------------------ #
@@ -67,6 +72,20 @@ def gemini_client():
 
     c = Client()
     c.register_adapter("gemini", GeminiAdapter(ProviderConfig(api_key=GEMINI_KEY, timeout=120.0)))
+    return c
+
+
+@pytest.fixture
+def anthropic_client():
+    """Client with Anthropic adapter."""
+    from attractor_llm import ProviderConfig
+    from attractor_llm.adapters.anthropic import AnthropicAdapter
+    from attractor_llm.client import Client
+
+    c = Client()
+    c.register_adapter(
+        "anthropic", AnthropicAdapter(ProviderConfig(api_key=ANTHROPIC_KEY, timeout=120.0))
+    )
     return c
 
 
@@ -418,3 +437,86 @@ class TestSubagentGemini:
         assert "42" in answer_file.read_text().strip(), (
             f"Expected '42' in answer.txt, got: {answer_file.read_text()!r}"
         )
+
+
+# ================================================================== #
+# Task 17: Multi-file edit — §9.12.7-9
+# ================================================================== #
+
+
+def _seed_multi_file_edit(workspace: Path) -> None:
+    """Seed two files sharing a constant name."""
+    (workspace / "module_a.py").write_text('OLD_VALUE = "alpha"\n')
+    (workspace / "module_b.py").write_text(
+        'from module_a import OLD_VALUE\nresult = OLD_VALUE + "_b"\n'
+    )
+
+
+def _assert_multi_file_edit(workspace: Path) -> None:
+    """Assert both files were updated."""
+    a_content = (workspace / "module_a.py").read_text()
+    b_content = (workspace / "module_b.py").read_text()
+    assert "NEW_VALUE" in a_content, f"module_a.py must contain NEW_VALUE. Got:\n{a_content}"
+    assert "OLD_VALUE" not in a_content, (
+        f"OLD_VALUE must be gone from module_a.py. Got:\n{a_content}"
+    )
+    assert "NEW_VALUE" in b_content, f"module_b.py must contain NEW_VALUE. Got:\n{b_content}"
+
+
+class TestMultiFileEditAnthropic:
+    """§9.12.7: Anthropic coordinated multi-file edit."""
+
+    @skip_no_anthropic
+    @pytest.mark.asyncio
+    async def test_coordinated_edit_across_two_files(self, workspace, anthropic_client):
+        _seed_multi_file_edit(workspace)
+        profile, tools = _get_profile_and_tools("anthropic")
+        config = SessionConfig(model=ANTHROPIC_MODEL, provider="anthropic", max_turns=10)
+        config = profile.apply_to_config(config)
+        async with anthropic_client:
+            session = Session(client=anthropic_client, config=config, tools=tools)
+            await session.submit(
+                f"In BOTH {workspace}/module_a.py AND {workspace}/module_b.py, "
+                f"rename the constant OLD_VALUE to NEW_VALUE. Edit both files."
+            )
+        _assert_multi_file_edit(workspace)
+
+
+class TestMultiFileEditOpenAI:
+    """§9.12.8: OpenAI coordinated multi-file edit."""
+
+    @skip_no_openai
+    @pytest.mark.asyncio
+    async def test_coordinated_edit_across_two_files(self, workspace, openai_client):
+        _seed_multi_file_edit(workspace)
+        profile, tools = _get_profile_and_tools("openai")
+        config = SessionConfig(model=OPENAI_MODEL, provider="openai", max_turns=10)
+        config = profile.apply_to_config(config)
+        async with openai_client:
+            session = Session(client=openai_client, config=config, tools=tools)
+            await session.submit(
+                f"In BOTH {workspace}/module_a.py AND {workspace}/module_b.py, "
+                f"rename the constant OLD_VALUE to NEW_VALUE. Edit both files."
+            )
+        _assert_multi_file_edit(workspace)
+
+
+class TestMultiFileEditGemini:
+    """§9.12.9: Gemini coordinated multi-file edit."""
+
+    @skip_no_gemini
+    @pytest.mark.asyncio
+    async def test_coordinated_edit_across_two_files(self, workspace, gemini_client):
+        _seed_multi_file_edit(workspace)
+        profile, tools = _get_profile_and_tools("gemini")
+        config = SessionConfig(model=GEMINI_MODEL, provider="gemini", max_turns=10)
+        config = profile.apply_to_config(config)
+        async with gemini_client:
+            session = Session(client=gemini_client, config=config, tools=tools)
+            await session.submit(
+                f"In BOTH {workspace}/module_a.py AND {workspace}/module_b.py, "
+                f"rename the constant OLD_VALUE to NEW_VALUE. Edit both files."
+            )
+        _assert_multi_file_edit(workspace)
+
+
