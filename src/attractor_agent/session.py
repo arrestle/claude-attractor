@@ -20,9 +20,14 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from attractor_agent.abort import AbortSignal
-from attractor_agent.environment import ExecutionEnvironment
+from attractor_agent.environment import ExecutionEnvironment, LocalEnvironment
 from attractor_agent.events import EventEmitter, EventKind, SessionEvent
-from attractor_agent.tools.core import set_environment, set_max_command_timeout
+from attractor_agent.tools.core import (
+    get_environment,
+    set_environment,
+    set_max_command_timeout,
+    set_process_callback,
+)
 
 # ProviderProfile lives in profiles.base which imports SessionConfig from this
 # module -- guard with TYPE_CHECKING to break the circular import.
@@ -244,6 +249,13 @@ class Session:
         # Wire config timeout ceiling to the shell tool's clamping logic
         set_max_command_timeout(self._config.max_command_timeout_ms)
 
+        # §9.1.6, §9.11.5: Register self.register_process as the spawn callback
+        # so _shell() commands auto-populate _tracked_processes for abort cleanup.
+        set_process_callback(self.register_process)
+        _env = get_environment()
+        if isinstance(_env, LocalEnvironment):
+            _env._spawn_callback = self.register_process
+
         # Steering queue: messages injected between tool rounds
         self._steer_queue: list[str] = []
 
@@ -263,9 +275,9 @@ class Session:
 
         # Tracked OS-level processes for graceful shutdown (§9.1.6, §9.11.5).
         # Populated by callers that spawn asyncio subprocesses and want them
-        # cleaned up on abort. Full integration requires env protocol changes
-        # (see _cleanup_on_abort Steps 2-4 comments).
-        self._tracked_processes: list[asyncio.subprocess.Process] = []
+        # cleaned up on abort. Accepts both asyncio and sync subprocess.Popen —
+        # duck-type compatible (both have .returncode and .send_signal()).
+        self._tracked_processes: list[Any] = []
 
         # Loop detection
         self._loop_detector = _LoopDetector(

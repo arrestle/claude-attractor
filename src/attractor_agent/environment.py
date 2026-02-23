@@ -31,7 +31,7 @@ import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 # ------------------------------------------------------------------ #
 # Shell result
@@ -158,6 +158,12 @@ class LocalEnvironment:
     Behavior is identical to the pre-abstraction tool implementations.
     """
 
+    def __init__(self) -> None:
+        # Callback invoked with the live subprocess.Popen right after spawn,
+        # before communicate() blocks. Wired by Session.__init__ for abort tracking.
+        # Spec §9.1.6, §9.11.5.
+        self._spawn_callback: Any | None = None
+
     async def read_file(self, path: str) -> str:
         file_path = Path(path).expanduser().resolve()
         return file_path.read_text(encoding="utf-8", errors="replace")
@@ -185,6 +191,7 @@ class LocalEnvironment:
     ) -> ShellResult:
         cwd = working_dir or os.getcwd()
         shell_env = env or dict(os.environ)
+        spawn_cb = self._spawn_callback  # capture before asyncio.to_thread
 
         def _run() -> ShellResult:
             try:
@@ -203,6 +210,13 @@ class LocalEnvironment:
                     stderr=f"Error: {e}",
                     returncode=-1,
                 )
+
+            # §9.1.6: notify caller of the live process for abort tracking
+            if spawn_cb is not None:
+                try:
+                    spawn_cb(proc)
+                except Exception:  # noqa: BLE001
+                    pass  # never let callback errors break command execution
 
             try:
                 stdout, stderr = proc.communicate(timeout=timeout)

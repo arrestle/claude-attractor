@@ -171,3 +171,42 @@ class TestMaxTurnsDefaults:
         assert "[Tool round limit reached]" not in result, (
             "max_tool_rounds_per_turn=0 should mean unlimited, not zero rounds allowed"
         )
+
+
+class TestShellProcessCallback:
+    """Task 2 — §9.1.6, §9.11.5: shell processes registered for abort cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_session_wires_process_callback_on_init(self):
+        """After Session.__init__, the module-level process callback must point
+        to session.register_process so shell commands auto-register."""
+        from unittest.mock import MagicMock
+
+        from attractor_agent.session import Session, SessionConfig
+        from attractor_agent.tools.core import get_process_callback
+
+        mock_client = MagicMock()
+        session = Session(client=mock_client, config=SessionConfig())
+        cb = get_process_callback()
+        assert cb is not None, "Session.__init__ must call set_process_callback()"
+        assert cb == session.register_process, "Process callback must be session.register_process"
+
+    @pytest.mark.asyncio
+    async def test_shell_command_registers_process(self, tmp_path):
+        """Running a shell command via the Session must populate _tracked_processes."""
+        from unittest.mock import MagicMock
+
+        from attractor_agent.session import Session, SessionConfig
+        from attractor_agent.tools.core import set_allowed_roots
+
+        set_allowed_roots([str(tmp_path)])
+        mock_client = MagicMock()
+        session = Session(client=mock_client, config=SessionConfig())
+
+        from attractor_agent.tools import core as tool_core
+
+        await tool_core._shell("echo hello", working_dir=str(tmp_path))
+
+        assert len(session._tracked_processes) > 0, (
+            "shell command must register its subprocess with the session"
+        )
