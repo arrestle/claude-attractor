@@ -25,15 +25,12 @@ from attractor_agent.tools.core import ALL_CORE_TOOLS, set_allowed_roots
 
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
 GEMINI_KEY = os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 OPENAI_MODEL = "gpt-4.1-mini"
 GEMINI_MODEL = "gemini-2.0-flash"
-ANTHROPIC_MODEL = "claude-sonnet-4-5"
 
 skip_no_openai = pytest.mark.skipif(not OPENAI_KEY, reason="OPENAI_API_KEY not set")
 skip_no_gemini = pytest.mark.skipif(not GEMINI_KEY, reason="GOOGLE_API_KEY/GEMINI_API_KEY not set")
-skip_no_anthropic = pytest.mark.skipif(not ANTHROPIC_KEY, reason="ANTHROPIC_API_KEY not set")
 
 
 # ------------------------------------------------------------------ #
@@ -70,20 +67,6 @@ def gemini_client():
 
     c = Client()
     c.register_adapter("gemini", GeminiAdapter(ProviderConfig(api_key=GEMINI_KEY, timeout=120.0)))
-    return c
-
-
-@pytest.fixture
-def anthropic_client():
-    """Client with Anthropic adapter."""
-    from attractor_llm import ProviderConfig
-    from attractor_llm.adapters.anthropic import AnthropicAdapter
-    from attractor_llm.client import Client
-
-    c = Client()
-    c.register_adapter(
-        "anthropic", AnthropicAdapter(ProviderConfig(api_key=ANTHROPIC_KEY, timeout=120.0))
-    )
     return c
 
 
@@ -186,8 +169,8 @@ class TestOpenAIReadAndEdit:
             )
 
         content = target.read_text()
-        assert "3306" in content, "Port should be changed to 3306"
-        assert "5432" not in content, "Old port should be gone"
+        assert "3306" in content, f"Port should be changed to 3306. Got:\n{content}"
+        assert "5432" not in content, f"Old port should be gone. Got:\n{content}"
         assert "DB_HOST" in content, f"DB_HOST should be preserved. Got:\n{content}"
         assert "DB_NAME" in content, f"DB_NAME should be preserved. Got:\n{content}"
 
@@ -217,6 +200,7 @@ class TestGeminiReadAndEdit:
         assert "3306" in content, f"Port should be changed to 3306. Got:\n{content}"
         assert "5432" not in content, f"Old port should be gone. Got:\n{content}"
         assert "DB_HOST" in content, f"DB_HOST should be preserved. Got:\n{content}"
+        assert "DB_NAME" in content, f"DB_NAME should be preserved. Got:\n{content}"
 
 
 # ================================================================== #
@@ -341,18 +325,19 @@ class TestSubagentOpenAI:
     @pytest.mark.asyncio
     async def test_subagent_completes_task(self, openai_client):
         """Subagent handles a delegated coding question (no tools)."""
-        result = await spawn_subagent(
-            client=openai_client,
-            prompt=(
-                "Write a Python one-liner that reverses a string. "
-                "Just output the code, nothing else."
-            ),
-            parent_depth=0,
-            max_depth=3,
-            model=OPENAI_MODEL,
-            provider="openai",
-            include_tools=False,
-        )
+        async with openai_client:
+            result = await spawn_subagent(
+                client=openai_client,
+                prompt=(
+                    "Write a Python one-liner that reverses a string. "
+                    "Just output the code, nothing else."
+                ),
+                parent_depth=0,
+                max_depth=3,
+                model=OPENAI_MODEL,
+                provider="openai",
+                include_tools=False,
+            )
         assert result.depth == 1, f"Expected depth=1, got {result.depth}"
         assert len(result.text) > 5, f"Expected non-trivial response, got: {result.text!r}"
         assert "[::-1]" in result.text or "reverse" in result.text.lower(), (
@@ -363,17 +348,19 @@ class TestSubagentOpenAI:
     @pytest.mark.asyncio
     async def test_subagent_with_tools(self, workspace, openai_client):
         """Subagent uses write_file to create a file."""
-        result = await spawn_subagent(
-            client=openai_client,
-            prompt=(
-                f"Write a file called 'answer.txt' in {workspace} containing just the number 42."
-            ),
-            parent_depth=0,
-            max_depth=3,
-            model=OPENAI_MODEL,
-            provider="openai",
-            include_tools=True,
-        )
+        async with openai_client:
+            result = await spawn_subagent(
+                client=openai_client,
+                prompt=(
+                    f"Write a file called 'answer.txt' in {workspace} "
+                    f"containing just the number 42."
+                ),
+                parent_depth=0,
+                max_depth=3,
+                model=OPENAI_MODEL,
+                provider="openai",
+                include_tools=True,
+            )
         assert result.depth == 1, f"Expected depth=1, got {result.depth}"
         answer_file = workspace / "answer.txt"
         assert answer_file.exists(), "Subagent should have created answer.txt"
@@ -389,18 +376,19 @@ class TestSubagentGemini:
     @pytest.mark.asyncio
     async def test_subagent_completes_task(self, gemini_client):
         """Subagent handles a delegated coding question (no tools)."""
-        result = await spawn_subagent(
-            client=gemini_client,
-            prompt=(
-                "Write a Python one-liner that reverses a string. "
-                "Just output the code, nothing else."
-            ),
-            parent_depth=0,
-            max_depth=3,
-            model=GEMINI_MODEL,
-            provider="gemini",
-            include_tools=False,
-        )
+        async with gemini_client:
+            result = await spawn_subagent(
+                client=gemini_client,
+                prompt=(
+                    "Write a Python one-liner that reverses a string. "
+                    "Just output the code, nothing else."
+                ),
+                parent_depth=0,
+                max_depth=3,
+                model=GEMINI_MODEL,
+                provider="gemini",
+                include_tools=False,
+            )
         assert result.depth == 1, f"Expected depth=1, got {result.depth}"
         assert len(result.text) > 5, f"Expected non-trivial response, got: {result.text!r}"
         assert "[::-1]" in result.text or "reverse" in result.text.lower(), (
@@ -411,17 +399,19 @@ class TestSubagentGemini:
     @pytest.mark.asyncio
     async def test_subagent_with_tools(self, workspace, gemini_client):
         """Subagent uses write_file to create a file."""
-        result = await spawn_subagent(
-            client=gemini_client,
-            prompt=(
-                f"Write a file called 'answer.txt' in {workspace} containing just the number 42."
-            ),
-            parent_depth=0,
-            max_depth=3,
-            model=GEMINI_MODEL,
-            provider="gemini",
-            include_tools=True,
-        )
+        async with gemini_client:
+            result = await spawn_subagent(
+                client=gemini_client,
+                prompt=(
+                    f"Write a file called 'answer.txt' in {workspace} "
+                    f"containing just the number 42."
+                ),
+                parent_depth=0,
+                max_depth=3,
+                model=GEMINI_MODEL,
+                provider="gemini",
+                include_tools=True,
+            )
         assert result.depth == 1, f"Expected depth=1, got {result.depth}"
         answer_file = workspace / "answer.txt"
         assert answer_file.exists(), "Subagent should have created answer.txt"
