@@ -1,0 +1,29 @@
+// Minimal pipeline to validate that shape=house routes to HumanHandler
+// instead of shape=hexagon which routes to ManagerHandler.
+//
+// This reproduces the fix for GitHub issue #36:
+//   https://github.com/samueljklee/attractor/issues/36
+//
+// The original DOT file used shape=hexagon for human review gates,
+// which maps to the ManagerHandler (expects child_graph attribute).
+// Using shape=house correctly maps to wait.human (HumanHandler).
+//
+// Note: No revision edges here. AutoApproveInterviewer picks the
+// first edge label as its response, which becomes preferred_label
+// for edge selection. A "Revise" label would cause an infinite loop.
+
+digraph ValidateHouseShape {
+    graph [goal="Validate that shape=house routes to HumanHandler"]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    // A simple codergen node
+    task1 [label="Generate Hello World", prompt="Write a simple hello world program in Python."]
+
+    // Human review gate using shape=house (correct)
+    review1 [shape=house, label="Human Check: Task 1"]
+
+    // Flow
+    start -> task1 -> review1 -> exit
+}

@@ -1,0 +1,53 @@
+digraph POIMicroservicePipeline {
+    graph [goal="Implement Scala POI Microservice", project_root="./services/poi-service"]
+
+    // Start and exit
+    start  [shape=Mdiamond, label="Start"]
+    exit   [shape=Msquare, label="Exit"]
+
+    // Stage 1: Scaffold
+    scaffold_service [label="Scaffold Scala Microservice", prompt="Generate a Scala microservice project using Akka HTTP (or Play). Include build.sbt, main class, project structure, and a placeholder POIController."]
+    review_scaffold  [shape=house, label="Human Check: Scaffold"]
+
+    // Stage 2: Endpoints
+    implement_create [label="POST /poi", prompt="Generate Scala code for POST /poi endpoint: accept JSON id, name, latitude, longitude. Return created POI."]
+    implement_read   [label="GET /poi/{id}", prompt="Generate Scala code for GET /poi/{id} endpoint: return POI or 404."]
+    implement_update [label="PUT /poi/{id}", prompt="Generate Scala code for PUT /poi/{id} endpoint: update POI or 404."]
+    implement_delete [label="DELETE /poi/{id}", prompt="Generate Scala code for DELETE /poi/{id} endpoint: remove POI, return 204 or 404."]
+    review_endpoints [shape=house, label="Human Check: Endpoints"]
+
+    // Stage 2b: OpenAPI
+    openapi_spec    [label="Generate OpenAPI/Swagger Spec", prompt="Generate a Swagger/OpenAPI specification (YAML or JSON) for all POI endpoints. Include request/response models, field types, and examples."]
+    review_openapi  [shape=house, label="Human Check: OpenAPI Spec"]
+
+    // Stage 3: Persistence
+    persistence       [label="Add Persistence Layer", prompt="Implement PostgreSQL integration using Slick. Include POI table schema and DAO for CRUD operations. Ensure endpoints persist and retrieve data correctly."]
+    review_persistence [shape=house, label="Human Check: Persistence"]
+
+    // Stage 4: Testing
+    test_unit        [label="Unit Tests", prompt="Generate Scala unit tests for each endpoint and DAO method using ScalaTest. Include validation of edge cases and errors."]
+    test_integration [label="Integration Tests", prompt="Generate Scala integration tests: run the microservice, exercise endpoints, and assert correct database behavior."]
+    review_testing   [shape=house, label="Human Check: Testing"]
+
+    // Workflow edges (forward edges labeled for auto-approve)
+    start -> scaffold_service
+    scaffold_service -> review_scaffold
+    review_scaffold -> implement_create [label="Approve"]
+    implement_create -> implement_read -> implement_update -> implement_delete
+    implement_delete -> review_endpoints
+    review_endpoints -> openapi_spec [label="Approve"]
+    openapi_spec -> review_openapi
+    review_openapi -> persistence [label="Approve"]
+    persistence -> review_persistence
+    review_persistence -> test_unit [label="Approve"]
+    test_unit -> test_integration
+    test_integration -> review_testing
+    review_testing -> exit [label="Approve"]
+
+    // Retry paths if human requests changes
+    review_scaffold -> scaffold_service [label="Revise"]
+    review_endpoints -> implement_create [label="Revise"]
+    review_openapi -> openapi_spec [label="Revise"]
+    review_persistence -> persistence [label="Revise"]
+    review_testing -> test_unit [label="Revise"]
+}

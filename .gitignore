@@ -38,3 +38,6 @@ htmlcov/
 .pyright/
 
 # py.typed marker is intentionally tracked
+
+# Git worktrees (local development only, must not be committed)
+.worktrees/
