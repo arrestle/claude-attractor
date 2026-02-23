@@ -17,9 +17,11 @@ from typing import Any
 
 import pytest
 
+from attractor_agent.events import EventKind, SessionEvent
 from attractor_agent.session import Session, SessionConfig
 from attractor_agent.subagent import spawn_subagent
 from attractor_agent.tools.core import ALL_CORE_TOOLS, set_allowed_roots
+from attractor_llm.types import Tool
 
 # ------------------------------------------------------------------ #
 # Constants
@@ -802,8 +804,6 @@ class TestReasoningEffortGemini:
 
 
 async def _run_loop_detection_test(workspace: Path, client: Any, model: str, provider: str) -> None:
-    from attractor_agent.events import EventKind, SessionEvent
-
     (workspace / "stuck.txt").write_text("loop bait\n")
     profile, tools = _get_profile_and_tools(provider)
     config = SessionConfig(
@@ -876,8 +876,6 @@ async def _run_error_recovery_test(client: Any, model: str, provider: str) -> No
             raise ValueError("Simulated tool failure on first call")
         return "Tool succeeded on retry"
 
-    from attractor_llm.types import Tool
-
     flaky = Tool(
         name="flaky_tool",
         description="A tool that fails on first call. Args: message (string).",
@@ -896,9 +894,12 @@ async def _run_error_recovery_test(client: Any, model: str, provider: str) -> No
         result = await session.submit(
             "Call the flaky_tool with message='test'. If it fails, try calling it again."
         )
+    assert call_count[0] >= 2, (
+        f"Flaky tool should have been called at least twice (fail + retry). "
+        f"Got: {call_count[0]} calls"
+    )
     assert result is not None, "Session must return result after tool error"
     assert len(result) > 0, f"Result must be non-empty. Got: {result!r}"
-    assert "Authentication" not in result, "Should not see auth errors during error recovery"
 
 
 class TestErrorRecoveryAnthropic:
@@ -936,8 +937,6 @@ class TestErrorRecoveryGemini:
 async def _run_format_validation_test(
     workspace: Path, client: Any, model: str, provider: str
 ) -> None:
-    from attractor_agent.events import EventKind, SessionEvent
-
     profile, tools = _get_profile_and_tools(provider)
     config = SessionConfig(model=model, provider=provider, max_turns=5)
     config = profile.apply_to_config(config)
