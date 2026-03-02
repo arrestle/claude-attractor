@@ -309,6 +309,7 @@ async def _cmd_run(args: argparse.Namespace) -> None:
             model=model,
             output_dir=getattr(args, "logs_dir", None),
             persona_dir=getattr(args, "persona_dir", None),
+            verbose=getattr(args, "verbose", False),
         )
         print("Backend: ClaudeCode (claude-code CLI)")
     elif backend_choice == "direct":
